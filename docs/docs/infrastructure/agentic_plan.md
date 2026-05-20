@@ -12,19 +12,22 @@ Limitation and scope, what the feature can do and can't do
 
 ## 3. Invariants
 
-#### 3.1 Functional Invariant
+#### **3.1 Functional Invariant**
 Let `t` be an MCP tool call, and `ENDPOINT` be an authenticated call (using a stored `token` for the active session) to the existing REST API counterpart for `t`. For all tool invocation with arguments `t(args)`, the following premises must hold:
 
 **1. Structural**
+
 The invocation of `t(args)` causes exactly one ENDPOINT call to be reported to the caller. The MCP _MAY_ retry on transport failure up to a bounded number of times before surfacing failure; retries are not counted as separate logical calls.
 
 **2. Payload**
+
 Content of `args` must not be modified beyond translation to comply with `ENDPOINT` argument schema. A translation here is defined as a syntactic transformation using a declared schema, no values should be transformed.
 
 **3. Response Content**
+
 Given that the MCP tool call is going to translate the REST response into an MCP response, the MCP response carries no information not present in the REST response; fields may be dropped, but never fabricated, inferred, or sourced from outside the REST response.
 
-#### 3.2 Security Invariant
+#### **3.2 Security Invariant**
 
 
 
@@ -46,12 +49,14 @@ An LLM at the end of the day is a probabilistic model. Because of that, banking 
 Implementations that were considered
 
 #### 6.1 MCP as an extention of the current `Next.js` REST API
+
 The team initially considered the possibility of extending the current service layer to also support MCP tool calls and have initially scoped the problem accordingly. However, due to the way authentication is handled via token introspection, the we realized that potentially exposing the user's Github token is a real risk as the MCP protocol does not support passing along sensitive credentials to be evaluated up stream. For this implementation alternative to be considered, authentication have to be done in a different manner that comply with the [MCP official security standards](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization).
 
 ### 1. MCP implementation as an extension to the existing service layer via `Next.js`
 
 
 ## 7. Threat Modeling
+
 
 ## 8. Testing strategy
 
