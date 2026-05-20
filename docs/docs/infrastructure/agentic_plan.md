@@ -92,9 +92,38 @@ sequenceDiagram
 To appropriately log the actions of the agent, we recommend a two-pronged approach with an audit log both locally available for a user as well as a remote audit log for GLADOS's server. This ensures that the user can reread the local log to be aware of the actions of the agent, and developers can monitor agent activity via the remote log. 
 
 #### **1. Remote Audit Log**
-Creating a new collection on GLADOS’s MongoDB with role-based restrictions that prevent editing operations is our recommended implementation of a synchronous append-only sink. 
+Creating a new capped collection on GLADOS’s MongoDB with role-based restrictions that prevent editing operations is our recommended implementation of a synchronous append-only sink. 
 
 In this collection, record an agent request’s  `event_id, user_id, timestamp, action_type, action_result, and agent_id`. A successful write/insertion to the collection allows the request to go through (the action to occur on the server); otherwise, the request is denied. A health check, implemented by a ping command to the database via a Next.js endpoint on GLADOS’s server, checks if an insertion could happen to the collection; if the check returns unhealthy, allow agentic non-mutating requests (i.e. read operations) but return degraded-mode error on mutating requests.
+
+The following subsections provide more implementation details on the above description.
+
+##### Document Fields:  
+
+For this collection, we recommend enforcing that each of the documents have the following fields for ensuring an accurate and thorough log of agentic activities is recorded: 
+
+- event_id — Unique identifier for each audit event 
+- user_id — Unique identifier for the user who initiated the action 
+- timestamp — UTC timestamp indicating when the action occurred 
+- action_type — Type of action performed (e.g., file_read, file_write) 
+- action_result — Outcome of the action (e.g., success, failure) 
+- agent_id — Identifier of the agent or model that performed the action 
+
+##### Synchronous: 
+
+In this setup, when an agent sends a request via an endpoint to GLADOS, an entry would be made in the MongoDB collection reflecting the event. And once this insertion is successfully made, the requested action can go through. Otherwise, the action would fail as the log insertion was not successful. 
+
+##### Append-Only:  
+
+Developers should restrict editing or delete permissions for this collection- this log is intended as a non-mutable record of events. Should a correction need to be made, a new entry should be inserted. 
+
+To implement this, developers can use a capped MongoDB collection, which is a type of collection ideal for maintaining logs because delete operations are restricted and, when the fixed size of the collection is reached, old entries are overwritten, which is ideal for audit logs as the most recent entries are most valued. Additionally, edit operations from users should be restricted via role-based checks in GLADOS server endpoints. 
+
+##### Continuous Health Check:  
+
+The MCP endpoint can ping the database to ensure that the audit log is healthy can be inserted into. Should this ping fail, agent action requests should be rejected automatically as the log cannot be inserted into. Otherwise, successful health checks mean that the database is healthy and ready for insertion. 
+
+To implement this, developers can create a Next.js health check endpoint that pings the MongoDB pod every certain time increments.  
 
 #### **2. Local Audit Log**
 While the current CLI produces a brief log of results/errors as the user runs commands, given the nature of agents, users likely would expect a more thorough record in order to examine what actions the agents took while utilizing their account. Utilizing the Python logging module may be most effective and allow flexibility. The module allows to write to a user’s local file to implement more extensive logging beyond the CLI’s current printouts to the console. Record agentic actions, including `datetime, action_taken, user_approval, result (Success or Failure), error (High Level Description Based Off Stack Trace If it Exists)`, to ensure that the dynamic information is included efficiently within a file that can then be scanned for certain keywords.
