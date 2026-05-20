@@ -38,13 +38,13 @@ The LLM agent and its provider sit outside of GLADOS's trust boundary and are th
 
 **S-4 - Bounded Tool Surface**. CHELL may only invoke `t` drawn from a statically declared allowlist. No `t` shall accept free-form filesystem paths, URLs, shell expressions, or ENDPOINT specifiers as arguments. This prevents CHELL from inducing arbitrary reads, writes, or egress through args.
 
-
 **S-5 - Diagnostic Discipline**. MCP facade logs, stderr, crash output, and telemetry shall not contain result data, artifact content, or credential material in any form CHELL or its host can read.
 
 **S-6 - Egress Confinement**. The MCP facade shall initiate no outbound network connection other than to ENDPOINT over verified TLS. CHELL shall not be able to induce arbitrary egress through args.
 
 **S-7 - User Override**. Voluntary delivery of data to CHELL by the user (paste, upload, screen sharing, dictation) lies outside the protection of `S-1 … S-6`. The facade shall neither facilitate, conceal, nor attempt to detect such transfers.
 
+**S-8 - Audit Integrity**. No state-mutating tool call shall complete without a corresponding append-only audit record being durably written. Records shall be neither modifiable nor deletable through any system interface. The audit log shall contain no silent gaps: any period during which audit writes were unavailable shall itself be reflected in the log as a degraded-mode record.
 ## 4. Architecture Overview
 Component diagrams and dataflow naratives. Add a subheader for each supporting subsystem
 
@@ -95,6 +95,58 @@ In this collection, record an agent request’s  `event_id, user_id, timestamp, 
 #### **2. Local Audit Log**
 For a more thorough record in order to examine what actions the agents took while utilizing their account, utilizing the Python logging module may be most effective and allow flexibility. The module allows to write to a user’s local file to implement more extensive logging beyond the CLI’s current printouts to the console. Record agentic actions, including `Datetime, Action taken, Approval from User, Result (Success or Failure), Stack Trace (If it Exists)`, to ensure that the dynamic information is included efficiently within a file that can then be scanned for certain keywords.
 
+### 4.3 MCP Facade
+The system follows a facade architecture: a local process on the user's machine sits between the agent (running under the Claude Code TUI, or any equivalent host) and the remote REST API. The facade is the only component that holds credentials, makes outbound REST calls, and decides what crosses the trust boundary to the agent. Data classified high-sensitivity does not flow to the agent through facade responses; instead, the facade places it in a handoff region on the local filesystem, and the user performs an explicit gesture to release it. The mechanism for that gesture is intentionally underspecified at this layer; suggested implementations are listed below.
+
+#### **Components**
+```mermaid
+flowchart TB
+    User((User))
+
+    subgraph LocalHost["Local host (user's machine)"]
+        TUI["Claude Code TUI<br/>(user-facing surface)"]
+        MCP["MCP Facade<br/>(token custodian, allowlisted tools)"]
+        FS[("Artifact handoff region<br/>(filesystem)")]
+    end
+
+    subgraph CHELLBox["CHELL (untrusted)"]
+        Agent["AI Agent + LLM provider"]
+    end
+
+    subgraph Remote["Remote infrastructure (GLADOS)"]
+        REST["REST API"]
+    end
+
+    User -->|prompt| TUI
+    User -->|reviews| FS
+    User -.->|consent gesture| FS
+    TUI <-->|input / output stream| Agent
+    Agent -->|MCP tool calls| MCP
+    MCP -->|LOW data response| Agent
+    MCP <-->|TLS, bearer token| REST
+    MCP -->|HIGH artifact write| FS
+```
+- **Claude Code TUI.** User's terminal interface to the agent. Treated as a trusted surface for input/display; does not enforce policy itself.
+- **AI Agent + LLM provider.** The reasoning and tool-invocation loop. Modeled as CHELL — anything the agent observes is assumed to be observable by an adversary.
+- **MCP Facade.** Local process. Holds the REST API credentials, exposes a static allowlist of tools, and decides per tool whether the result returns inline (low-sensitivity path) or via the handoff region (high-sensitivity path).
+- **Artifact handoff region.** A filesystem location where the facade deposits high-sensitivity results. The release of content from this region to the agent is mediated entirely by the user.
+REST API. Remote service; authenticates via token introspection, authorizes per-identity.
+
+#### **Data paths**
+
+- `LOW` - **Low-sensitivity path.** Agent → MCP tool call → REST → translated MCP response → agent. Constrained by S-1 (no high-sensitivity content in responses) and §3.1 (response translation).
+- `HIGH` - **High-sensitivity path.** Agent → MCP tool call → REST → artifact written to handoff region. The agent receives only an acknowledgement; the result content sits at rest until the user acts.
+
+#### **Consent gesture - suggested mechanisms**
+The architecture does not mandate a specific gesture; future contributors should pick what fits their platform. Non-exhaustive options:
+
+- **Copy / paste.** User pastes artifact content into the TUI. Unforgeable; manual.
+- **Permission flip (chmod).** User grants the agent's runtime UID read access; an allowlisted tool then fetches. Requires UID separation between facade and agent.
+- **Move into a watched inbox.** User drops the artifact into a designated directory the agent reads on demand. Same UID consideration as above.
+Confirmation token. User reviews the artifact, types a short token displayed alongside it into the TUI; facade releases on next reference. Adds binding/expiry complexity.
+- **Out-of-band CLI helper.** User runs a small command that pushes content into the agent's input stream. Useful where clipboard integration is poor.
+
+These are not mutually exclusive, a system may offer several.
 
 ## 5. Implementation notes
 Some useful implementation notes
@@ -104,7 +156,7 @@ An LLM at the end of the day is a probabilistic model. Because of that, banking 
 
 
 ## 6. Alternatives Considered
-Implementations that were considered
+This section details alternative implementations that were considered during initial architecting and design of the agentic workflow integration.
 
 ### 6.1 MCP as an extention of the current `Next.js` REST API
 Rather than running the MCP facade locally on the user's machine, MCP tool calls could be served directly from the existing Next.js REST API, with clients connecting over the network.
@@ -146,7 +198,7 @@ This decision should be revisited if any of the following becomes true:
 Future contributors taking this on should expect to implement token issuance, signing key rotation, a browserless token acquisition UX (the painful part), local JWT verification at REST, and a revocation strategy. None of this is intractable; the current team simply judged the present arrangement adequate for the system's needs.
 
 ## 7. Threat Modeling
-
+This section enumerates threats within the system's scope using the STRIDE framework (Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege). The aim is to document the attack surface so new contributors can reason about changes, and to make existing mitigations and known gaps legible. Threats outside the scope of the system (credentialed insiders, social engineering, supply-chain compromise of dependencies) are noted only where they meaningfully shape design decisions.
 
 ## 8. Testing strategy
 
