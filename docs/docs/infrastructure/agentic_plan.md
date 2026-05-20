@@ -81,7 +81,12 @@ sequenceDiagram
     MCP-->>Agent: translated result (subject to S-1)
     Agent-->>User: response
 ```
-
+1. User prompts the AI agent to perform task `A` on data `D`.
+2. The agent invokes the corresponding MCP tool with a reference to `D`, not its contents (`S-2`).
+3. The MCP facade issues a REST call for task A with the token attached.
+4. The REST API introspects the token at GitHub and receives the external identity.
+5. The REST API resolves external identity to internal identity `U` via MongoDB.
+6. The REST API executes task `A` under `U` and returns the result. The facade translates the response per `Section 3.1` and surfaces it to the agent subject to `S-1`.
 ### 4.2 Audit Logs
 
 To appropriately log the actions of the agent, we recommend a two-pronged approach with an audit log both locally available for a user as well as a remote audit log for GLADOS's server. This ensures that the user can reread the local log to be aware of the actions of the agent, and developers can monitor agent activity via the remote log. 
