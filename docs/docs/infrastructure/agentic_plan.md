@@ -97,7 +97,20 @@ Creating a new collection on GLADOS’s MongoDB with role-based restrictions tha
 In this collection, record an agent request’s  `event_id, user_id, timestamp, action_type, action_result, and agent_id`. A successful write/insertion to the collection allows the request to go through (the action to occur on the server); otherwise, the request is denied. A health check, implemented by a ping command to the database via a Next.js endpoint on GLADOS’s server, checks if an insertion could happen to the collection; if the check returns unhealthy, allow agentic non-mutating requests (i.e. read operations) but return degraded-mode error on mutating requests.
 
 #### **2. Local Audit Log**
-For a more thorough record in order to examine what actions the agents took while utilizing their account, utilizing the Python logging module may be most effective and allow flexibility. The module allows to write to a user’s local file to implement more extensive logging beyond the CLI’s current printouts to the console. Record agentic actions, including `Datetime, Action taken, Approval from User, Result (Success or Failure), Stack Trace (If it Exists)`, to ensure that the dynamic information is included efficiently within a file that can then be scanned for certain keywords.
+While the current CLI produces a brief log of results/errors as the user runs commands, given the nature of agents, users likely would expect a more thorough record in order to examine what actions the agents took while utilizing their account. Utilizing the Python logging module may be most effective and allow flexibility. The module allows to write to a user’s local file to implement more extensive logging beyond the CLI’s current printouts to the console. Record agentic actions, including `datetime, action_taken, user_approval, result (Success or Failure), error (High Level Description Based Off Stack Trace If it Exists)`, to ensure that the dynamic information is included efficiently within a file that can then be scanned for certain keywords.
+
+A basic logging example is the following: 
+
+```
+>>> import logging 
+>>> logging.basicConfig( 
+...    filename='glados_audit.log', 
+...    level=logging.INFO, 
+... ) 
+>>> logging.error("Something went wrong!")
+```
+
+By saving the logs to a file, such as “glados_audit.log” as in the above example, instead of simply printing to a terminal, we can ensure that the dynamic information is included efficiently within a file that can then be scanned for certain keywords. 
 
 ### 4.3 MCP Facade
 The system follows a facade architecture: a local process on the user's machine sits between the agent (running under the Claude Code TUI, or any equivalent host) and the remote REST API. The facade is the only component that holds credentials, makes outbound REST calls, and decides what crosses the trust boundary to the agent. Data classified high-sensitivity does not flow to the agent through facade responses; instead, the facade places it in a handoff region on the local filesystem, and the user performs an explicit gesture to release it. The mechanism for that gesture is intentionally underspecified at this layer; suggested implementations are listed below.
@@ -276,11 +289,16 @@ Using Ollama to run models locally will enable effective model management- utili
 
 Create a test suite composed of unit tests that mock the Next.js REST endpoints to ensure that the MCP server calls in order to test conformation of the functional invariants defined in 3.1. 
 
-To test the structural invariant, each MCP tool call should result in one HTTP request sent to the REST endpoint, with successful calls tested as well as calls that require retries before surfaced failure. 
+- To test the structural invariant, each MCP tool call should result in one HTTP request sent to the REST endpoint, with successful calls tested as well as calls that require retries before surfaced failure. 
+- To test the payload invariant, create unit tests with a variety of arguments to ensure that the corresponding REST requests has the proper schema with no incorrect changing of the values. 
+- To test the response invariant, mock custom payloads from the REST API to ensure that the MCP server does not create, add, or remove fabricated data in the responses.
 
-To test the payload invariant, create unit tests with a variety of arguments to ensure that the corresponding REST requests has the proper schema with no incorrect changing of the values. 
+### 8.4 Security Evaluation Involving Integration and Component Testing
 
-To test the response invariant, mock custom payloads from the REST API to ensure that the MCP server does not create, add, or remove fabricated data in the responses.
+To ensure our security architecture functions as expected, a variety of tests, mainly following under integration and component level testing, are recommended.
+
+- Data access for the CHELL is restricted to protect against improper leakage of credentials, experiment results, and other sensitive information. To test this, walk through a full experiment creation process using an agent, with one walk through being happy path and another with a purposefully-thrown crash. Then monitor all generated telemetry streams for sensitive data to see if any such information was logged by the agent.
+- The audit log collection is intended to record mutable actions taken by agents interacting with the system (full schema of the collection included in the architecture section). To test this, execute a series of mutable actions (running a new experiment, updating experiment information, deleting experiment information, or any other mutable actions that are implemented), and confirm that the collection writes that occurred to log these actions properly record each. To ensure full coverage beyond just the happy path testing, temporarily scale down the MongoDB pods (which should cause the health check associated with the audit log to fail), and then attempt to make the same mutable actions. Each action should be denied, with degraded-mode error returned as its reason.
  
 
 ## 9. Unresolved decisions
@@ -292,5 +310,7 @@ To test the response invariant, mock custom payloads from the REST API to ensure
 - [RFC8628](https://www.rfc-editor.org/rfc/rfc8628)
 - [MCP Specification](https://modelcontextprotocol.io/specification/2025-11-25)
 - [Github API Request Limit](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api?apiVersion=2026-03-10)
+- [Logging in Python](https://realpython.com/python-logging/)
+- [Audit Logs in MongoDB](https://oneuptime.com/blog/post/2026-03-31-mongodb-how-to-implement-audit-logging-in-mongodb/view)
 
 
