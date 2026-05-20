@@ -7,7 +7,11 @@ After some consideration, the team decided that it is recommended to pursure a l
 
 
 ## 2. Scope and limitations
-Limitation and scope, what the feature can do and can't do
+The following describes both the scope of the agentic implementation feature as well as possible limitations:
+
+- The agentic model used by the user is not within scope; the mistakes the model might make in utilizing MCP tool calls or in adjusting the hyperparameters of an experiment for a new run is not within scope. Ergo, the infrastructure for such calls to occur securely and consistently is within scope; the quality of the model is not.
+- The user of this feature is assumed to have a GitHub account for which a GitHub token can be gained through device flow authentication, which allows for authentication to GLADOS; Google OAuth or other provider specific Oauth routes are not within scope.
+- We recommend limiting this feature to user's of priviledged or admin permission levels, however this feature does have the possibility to be open to users at all permission levels.
 
 
 ## 3. Invariants
@@ -36,7 +40,17 @@ Component diagrams and dataflow naratives. Add a subheader for each supporting s
 #### 4.1 Authentication Subsystem
 Some details on token introspection, and accompanying diagrams if applicable
 
-#### 4.2 
+#### 4.2 Audit Logs
+To appropriately log the actions of the agent, we recommend a two-pronged approach with an audit log both locally available for a user as well as a remote audit log for GLADOS's server. This ensures that the user can reread the local log to be aware of the actions of the agent, and developers can monitor agent activity via the remote log. 
+
+**1. Remote Audit Log**
+Creating a new collection on GLADOS’s MongoDB with role-based restrictions that prevent editing operations is our recommended implementation of a synchronous append-only sink. 
+
+In this collection, record an agent request’s  `event_id, user_id, timestamp, action_type, action_result, and agent_id`. A successful write/insertion to the collection allows the request to go through (the action to occur on the server); otherwise, the request is denied. A health check, implemented by a ping command to the database via a Next.js endpoint on GLADOS’s server, checks if an insertion could happen to the collection; if the check returns unhealthy, allow agentic non-mutating requests (i.e. read operations) but return degraded-mode error on mutating requests.
+
+**2. Local Audit Log**
+For a more thorough record in order to examine what actions the agents took while utilizing their account, utilizing the Python logging module may be most effective and allow flexibility. The module allows to write to a user’s local file to implement more extensive logging beyond the CLI’s current printouts to the console. Record agentic actions, including `Datetime, Action taken, Approval from User, Result (Success or Failure), Stack Trace (If it Exists)`, to ensure that the dynamic information is included efficiently within a file that can then be scanned for certain keywords.
+
 
 ## 5. Implementation notes
 Some useful implementation notes
@@ -60,10 +74,34 @@ The team initially considered the possibility of extending the current service l
 
 ## 8. Testing strategy
 
+To ensure that the features associated with enabling agentic workflows in GLADOS are properly implemented, creating a multi-faceted testing strategy is crucial. The following tests can establish correctness and also ensure implementation matches security specifications: 
+
+### 8.1 Agent Testing to test End-to-end Operations and Monitor Nondeterministic Interactions 
+
+This testing would verify that end-to-end operations of a local agent using the locally hosted MCP servers to call the REST API endpoints, be recorded in the audit log, and then return the expected payload. This would ensure that the correct sequency of calls could occur. 
+
+This test would use the addnums experiment (located here: [Add Nums Experiment](https://github.com/AutomatingSciencePipeline/Monorepo/blob/main/example_experiments/python/addNums.py)) 
+
+A 32 GB VM for running local models can be available at request from the CSSE Department system admin.  
+
+Using Ollama to run models locally will enable effective model management- utilize a model with Ollama that uses approximately 8B-16B parameter size model in order to not use resources available via the VM effectively. 
+
+### 8.2 Unit Testing of MCP Endpoints 
+
+Create a test suite composed of unit tests that mock the Next.js REST endpoints to ensure that the MCP server calls in order to test conformation of the functional invariants defined in 3.1. 
+
+To test the structural invariant, each MCP tool call should result in one HTTP request sent to the REST endpoint, with successful calls tested as well as calls that require retries before surfaced failure. 
+
+To test the payload invariant, create unit tests with a variety of arguments to ensure that the corresponding REST requests has the proper schema with no incorrect changing of the values. 
+
+To test the response invariant, mock custom payloads from the REST API to ensure that the MCP server does not create, add, or remove fabricated data in the responses.
+ 
+
 ## 9. Unresolved decisions
 
 ## 10. References
 
+[Utilizing Ollama](https://www.mindstudio.ai/blog/ollama-run-ai-models-locally-claude-code-workflows)
 
 
 
