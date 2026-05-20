@@ -200,6 +200,37 @@ Future contributors taking this on should expect to implement token issuance, si
 ## 7. Threat Modeling
 This section enumerates threats within the system's scope using the STRIDE framework (Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege). The aim is to document the attack surface so new contributors can reason about changes, and to make existing mitigations and known gaps legible. Threats outside the scope of the system (credentialed insiders, social engineering, supply-chain compromise of dependencies) are noted only where they meaningfully shape design decisions.
 
+```mermaid
+flowchart TB
+    User(["User"])
+    subgraph CHELL_TB["CHELL (untrusted)"]
+        Agent["AI Agent + LLM provider"]
+    end
+
+  
+
+    subgraph LocalHost["Local host (trusted)"]
+        TUI["Claude Code TUI"]
+        MCP(("MCP Facade"))
+        Token[("Token store")]
+        FS[("Artifact handoff region")]
+    end
+
+    subgraph Remote["Remote infra (trusted)"]
+        REST(("REST API"))
+    end
+
+    User -->|f1: prompt| TUI
+    TUI <-->|f2: I/O stream| Agent
+    Agent -->|f3: tool call args| MCP
+    MCP -->|f4: LOW response| Agent
+    MCP <==>|f5: REST over TLS — crosses public network| REST
+    MCP -->|f6: HIGH artifact write| FS
+    User -->|f7: review| FS
+    User -.->|f8: consent gesture| FS
+    Token -.->|read by| MCP
+```
+
 ## 8. Testing strategy
 
 To ensure that the features associated with enabling agentic workflows in GLADOS are properly implemented, creating a multi-faceted testing strategy is crucial. The following tests can establish correctness and also ensure implementation matches security specifications: 
