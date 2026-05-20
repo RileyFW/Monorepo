@@ -343,5 +343,6 @@ To ensure our security architecture functions as expected, a variety of tests, m
 - [Github API Request Limit](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api?apiVersion=2026-03-10)
 - [Logging in Python](https://realpython.com/python-logging/)
 - [Audit Logs in MongoDB](https://oneuptime.com/blog/post/2026-03-31-mongodb-how-to-implement-audit-logging-in-mongodb/view)
+- [Audit Logs with Agentic Systems](https://www.loginradius.com/blog/engineering/auditing-and-logging-ai-agent-activity)
 
 
