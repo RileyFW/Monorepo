@@ -36,17 +36,16 @@ The LLM agent and its provider sit outside of GLADOS's trust boundary and are th
 
 **S-3 - Credential Confinement**. The `token` shall not be observable by CHELL through any MCP tool result, error path, argument echo, or diagnostic output.
 
-**S-4 - Bounded Tool Surface**. CHELL may only invoke `t` drawn from a statically declared allowlist. No `t` shall accept free-form filesystem paths, URLs, shell expressions, or ENDPOINT specifiers as arguments. This prevents CHELL from inducing arbitrary reads, writes, or egress through args.
+**S-4 - Bounded Tool Surface**. CHELL may only invoke `t` drawn from a statically declared allowlist. No `t` shall accept free-form filesystem paths, URLs, shell expressions, or ENDPOINT specifiers as arguments. This prevents CHELL from inducing arbitrary reads, writes, or egress through `args`.
 
 **S-5 - Diagnostic Discipline**. MCP facade logs, stderr, crash output, and telemetry shall not contain result data, artifact content, or credential material in any form CHELL or its host can read.
 
-**S-6 - Egress Confinement**. The MCP facade shall initiate no outbound network connection other than to ENDPOINT over verified TLS. CHELL shall not be able to induce arbitrary egress through args.
+**S-6 - Egress Confinement**. The MCP facade shall initiate no outbound network connection other than to ENDPOINT over verified TLS. CHELL shall not be able to induce arbitrary egress through `args`.
 
 **S-7 - User Override**. Voluntary delivery of data to CHELL by the user (paste, upload, screen sharing, dictation) lies outside the protection of `S-1 … S-6`. The facade shall neither facilitate, conceal, nor attempt to detect such transfers.
 
 **S-8 - Audit Integrity**. No state-mutating tool call shall complete without a corresponding append-only audit record being durably written. Records shall be neither modifiable nor deletable through any system interface. The audit log shall contain no silent gaps: any period during which audit writes were unavailable shall itself be reflected in the log as a degraded-mode record.
 ## 4. Architecture Overview
-Component diagrams and dataflow naratives. Add a subheader for each supporting subsystem
 
 ### 4.1 Authentication Subsystem
 The system establishes caller identity at the REST API via RFC 7662 token introspection. The MCP facade is the sole custodian of the user's token within the local environment; this placement is what realizes `S-3` (credential confinement).
@@ -151,8 +150,31 @@ These are not mutually exclusive, a system may offer several.
 ## 5. Implementation notes
 Some useful implementation notes
 ### 5.1 Strive for enforcement through architecture and design rather than prompt engineering
-An LLM at the end of the day is a probabilistic model. Because of that, banking on the fact that it output will be governable and deterministic is a naive assumption. If you wish for the agent to not attempt an action, then the architecture should never allow for such cases. For example, instead of prompting "Do not read the content of this secret file," you can instead design the system so that the agent can issue a directive to handle such files to an MCP server instead. Now, the agent concern is no longer "I must not touch this file" but rather "I interact with this server to carry out the function on my behalf", which is easier to enforce and control. 
+An LLM at the end of the day is a probabilistic model. Because of that, banking on the fact that it output will be governable and deterministic is a naive assumption. If you wish for the agent to not attempt an action, then the architecture should never allow for such cases.
 
+### 5.2 Default new operations to HIGH sensitivity
+Sensitivity classification is the most consequential decision per tool: LOW means the result flows directly to CHELL. Defaulting to HIGH forces contributors to argue explicitly that a given response field is safe to expose, and creates an auditable trail of those arguments. LOW-by-default silently leaks whatever a less careful contributor didn't think to question.
+
+### 5.3 Allowlist, never blocklist
+The set of tools, response fields, and outbound destinations the facade may emit must be statically enumerated. Resist any pattern that lets configuration, runtime conditions, or model output expand these sets. Every such pattern is a path by which CHELL or a misconfigured deployment widens the attack surface.
+
+### 5.4 Treat error paths like response paths
+The agent reads errors as eagerly as it reads successful responses. A stack trace, an exception message, or a "field X was missing" complaint is a data channel. The invariants on response content (`S-1`, `S-3`, `S-5`) apply equally to every place the facade can emit text (exceptions, transport errors, debug output, etc...).
+
+### 5.5 Fail closed
+When in doubt (introspection times out, schema validation fails, the audit sink is unavailable, an argument is unrecognized) reject the call. A broken feature is recoverable; a silent leak is not. This is the default that makes `S-1` (unknown fields dropped) and `S-8` (no mutation without audit) cheap to implement: when behavior is ambiguous, the safe answer is to do nothing.
+
+### 5.6 Encode invariants as CI checks
+Formal invariants are written to be mechanically translatable. Every invariants that admits a test should have one wired into the CI pipeline: shape assertions for `S-1`, emit-path scanning for `S-3`, static analysis of the tool registry for `S-4`, failure-injection on the audit sink for `S-8`, and so on. This moves security from contributor discipline (which decays under deadline pressure) to executable proof (which is regenerated on every commit), and makes audits cheap by giving reviewers running tests rather than arguments. The residual judgment (recognizing when a new tool introduces a surface no existing test covers) cannot be mechanized, but it becomes narrower and more honest once routine checks are automatic.
+
+### 5.7 The user is a cooperator, not an obstacle
+The high-sensitivity consent gesture exists because **the user is a participant in the security model, not friction to be optimized away**. Future requests to "make consent easier" by weakening the gesture should be treated with skepticism. UX friction in the consent mechanism is a deliberate choice.
+
+### 5.8 Beware third-party SDK telemetry
+Logging libraries, error trackers, and observability SDKs frequently capture function arguments, request bodies, and stack-local variables. Any such SDK installed in the facade process becomes part of `S-5`'s threat surface. Audit every dependency for outbound behavior; prefer libraries with explicit, controllable telemetry.
+
+### 5.9 Test refusal, not just success
+The interesting tests in this system are the ones that confirm the facade *won't* do something: malformed args are rejected, unknown response fields are dropped, audit failure blocks the mutation. Tests that only exercise the happy path leave the actual security properties unverified.
 
 
 ## 6. Alternatives Considered
