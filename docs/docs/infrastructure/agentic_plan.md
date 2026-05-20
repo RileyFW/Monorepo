@@ -279,11 +279,13 @@ To ensure that the features associated with enabling agentic workflows in GLADOS
 
 This testing would verify that end-to-end operations of a local agent using the locally hosted MCP servers to call the REST API endpoints, be recorded in the audit log, and then return the expected payload. This would ensure that the correct sequency of calls could occur. 
 
-This test would use the addnums experiment (located here: [Add Nums Experiment](https://github.com/AutomatingSciencePipeline/Monorepo/blob/main/example_experiments/python/addNums.py)) 
+This test would use the addnums experiment (located here: [Add Nums Experiment](https://github.com/AutomatingSciencePipeline/Monorepo/blob/main/example_experiments/python/addNums.py)) with a description of the experiment [on this documentation page](https://github.com/AutomatingSciencePipeline/Monorepo/blob/main/docs/docs/deafult-exp-guides/addNums.md).
+
+This test would require a full sequence of calls to execute the experiment: Starting with authentication, then proceeding to submitting and running the experiment, querying to check on experiment status, and downloading all relevant experiment artifacts. See security testing in 8.3 which elaborates on some of the security standards that need to be tested for these actions; however, this end-to-end testing will check for functionality first. 
 
 A 32 GB VM for running local models can be available at request from the CSSE Department system admin.  
 
-Using Ollama to run models locally will enable effective model management- utilize a model with Ollama that uses approximately 8B-16B parameter size model in order to not use resources available via the VM effectively. 
+Using Ollama to run models locally will enable effective model management- utilize a model with Ollama that uses approximately 8B-16B parameter size model in order to use resources available via the VM effectively. 
 
 ### 8.2 Unit Testing of MCP Endpoints 
 
@@ -293,7 +295,7 @@ Create a test suite composed of unit tests that mock the Next.js REST endpoints 
 - To test the payload invariant, create unit tests with a variety of arguments to ensure that the corresponding REST requests has the proper schema with no incorrect changing of the values. 
 - To test the response invariant, mock custom payloads from the REST API to ensure that the MCP server does not create, add, or remove fabricated data in the responses.
 
-### 8.4 Security Evaluation Involving Integration and Component Testing
+### 8.3 Security Evaluation Involving Integration and Component Testing
 
 To ensure our security architecture functions as expected, a variety of tests, mainly following under integration and component level testing, are recommended.
 
