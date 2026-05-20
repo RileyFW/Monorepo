@@ -33,7 +33,7 @@ Content of `args` must not be modified beyond translation to comply with `ENDPOI
 Given that the MCP tool call is going to translate the REST response into an MCP response, the MCP response carries no information not present in the REST response; fields may be dropped, but never fabricated, inferred, or sourced from outside the REST response.
 
 #### **3.2 Security Invariant**
-The LLM agent and its provider sit outside the system's trust boundary and are therefore modeled as a Compromisable, Host or External LLM Layer (CHELL). The following invariants must hold against the CHELL:
+The LLM agent and its provider sit outside of GLADOS's trust boundary and are therefore modeled as a Compromisable Host or External LLM Liaison (CHELL). The following invariants must hold against the CHELL:
 
 **S-1 - Result Confidentiality**
 
