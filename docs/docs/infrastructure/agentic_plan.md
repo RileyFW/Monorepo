@@ -231,7 +231,7 @@ This section enumerates threats within the system's scope using the STRIDE frame
 flowchart TB
     User(["User"])
     subgraph CHELL_TB["CHELL (untrusted)"]
-        Agent["AI Agent + LLM provider"]
+        Agent["AI Agent + LLM provider"] 
     end
 
   
@@ -241,6 +241,7 @@ flowchart TB
         MCP(("MCP Facade"))
         Token[("Token store")]
         FS[("Artifact handoff region")]
+        Logs[("Local Logs")]
     end
 
     subgraph Remote["Remote infra (trusted)"]
@@ -255,8 +256,37 @@ flowchart TB
     MCP -->|f6: HIGH artifact write| FS
     User -->|f7: review| FS
     User -.->|f8: consent gesture| FS
-    Token -.->|read by| MCP
+    Token -.->|read by| MCP 
+    TUI --> Logs
 ```
+
+#### **Threats by flow / element**
+
+- **f3 (Agent → MCP):**
+    1. User Spoofing via impersonating an LLM. If MCP is visible outside of localhost, an actor can pose as an LLM and invoke tool calls on the MCP without restriction
+- **f4 (MCP → Agent):**
+    1. High-sensitivity content leaks via result field, error, or metadata
+- **f5 (MCP ↔ REST, over public network):**
+    1. Traffic blocking, accepted as observable failure
+- **Token store:**
+    1. Disclosure via logs, stderr, crash dumps, telemetry
+- **MCP facade (process):**
+    1. CHELL induces tool-call flood, exhausting facade or REST quota
+- **f8 (user consent gesture):**
+    1. rubber-stamped consent indistinguishable from reviewed consent
+
+### **Gaps**
+
+The following surfaces are not currently covered by security invariants and should be designed deliberately before launch:
+
+- **Spoofing mitigations.** The MCP trusts all LLM as originating from the user. In therory, an attacker, knowing the address of the MCP, can interact with the MCP to perform arbitrary operations under the user's credentials.
+    - Possible mitigation:
+        - Use a digital signature algorithm (DSA) such that the user must provide a public key to the MCP in advance. If the user cannot provide a valid signature, do not run those operations
+        - Only allow MCP to accept calls from localhost
+
+- **Consent quality.** The model assumes the user reviews artifact content before releasing it; rubber-stamping is acknowledged but not defended. Future work could explore review-friendliness (diffs, summaries, size warnings) without weakening the gesture itself.
+
+> Mitigation research for the above is left to whoever picks them up.
 
 ## 8. Testing strategy
 
