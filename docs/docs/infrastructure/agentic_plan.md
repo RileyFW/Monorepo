@@ -328,7 +328,7 @@ The following surfaces are not currently covered by security invariants and shou
 
 - **Consent quality.** The model assumes the user reviews artifact content before releasing it; rubber-stamping is acknowledged but not defended. Future work could explore review-friendliness (diffs, summaries, size warnings) without weakening the gesture itself.
 
-> Mitigation research for the above is left to whoever picks them up.
+> Mitigation research and developing an incident response plan for the above is left to whoever picks them up.
 
 ## 8. Testing strategy
 
