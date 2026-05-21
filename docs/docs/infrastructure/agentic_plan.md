@@ -92,12 +92,54 @@ sequenceDiagram
 To appropriately log the actions of the agent, we recommend a two-pronged approach with an audit log both locally available for a user as well as a remote audit log for GLADOS's server. This ensures that the user can reread the local log to be aware of the actions of the agent, and developers can monitor agent activity via the remote log. 
 
 #### **1. Remote Audit Log**
-Creating a new collection on GLADOS’s MongoDB with role-based restrictions that prevent editing operations is our recommended implementation of a synchronous append-only sink. 
+Creating a new capped collection on GLADOS’s MongoDB with role-based restrictions that prevent editing operations is our recommended implementation of a synchronous append-only sink. 
 
 In this collection, record an agent request’s  `event_id, user_id, timestamp, action_type, action_result, and agent_id`. A successful write/insertion to the collection allows the request to go through (the action to occur on the server); otherwise, the request is denied. A health check, implemented by a ping command to the database via a Next.js endpoint on GLADOS’s server, checks if an insertion could happen to the collection; if the check returns unhealthy, allow agentic non-mutating requests (i.e. read operations) but return degraded-mode error on mutating requests.
 
+The following subsections provide more implementation details on the above description.
+
+##### Document Fields:  
+
+For this collection, we recommend enforcing that each of the documents have the following fields for ensuring an accurate and thorough log of agentic activities is recorded: 
+
+- event_id — Unique identifier for each audit event 
+- user_id — Unique identifier for the user who initiated the action 
+- timestamp — UTC timestamp indicating when the action occurred 
+- action_type — Type of action performed (e.g., file_read, file_write) 
+- action_result — Outcome of the action (e.g., success, failure) 
+- agent_id — Identifier of the agent or model that performed the action 
+
+##### Synchronous: 
+
+In this setup, when an agent sends a request via an endpoint to GLADOS, an entry would be made in the MongoDB collection reflecting the event. And once this insertion is successfully made, the requested action can go through. Otherwise, the action would fail as the log insertion was not successful. 
+
+##### Append-Only:  
+
+Developers should restrict editing or delete permissions for this collection- this log is intended as a non-mutable record of events. Should a correction need to be made, a new entry should be inserted. 
+
+To implement this, developers can use a capped MongoDB collection, which is a type of collection ideal for maintaining logs because delete operations are restricted and, when the fixed size of the collection is reached, old entries are overwritten, which is ideal for audit logs as the most recent entries are most valued. Additionally, edit operations from users should be restricted via role-based checks in GLADOS server endpoints. 
+
+##### Continuous Health Check:  
+
+The MCP endpoint can ping the database to ensure that the audit log is healthy can be inserted into. Should this ping fail, agent action requests should be rejected automatically as the log cannot be inserted into. Otherwise, successful health checks mean that the database is healthy and ready for insertion. 
+
+To implement this, developers can create a Next.js health check endpoint that pings the MongoDB pod every certain time increments.  
+
 #### **2. Local Audit Log**
-For a more thorough record in order to examine what actions the agents took while utilizing their account, utilizing the Python logging module may be most effective and allow flexibility. The module allows to write to a user’s local file to implement more extensive logging beyond the CLI’s current printouts to the console. Record agentic actions, including `Datetime, Action taken, Approval from User, Result (Success or Failure), Stack Trace (If it Exists)`, to ensure that the dynamic information is included efficiently within a file that can then be scanned for certain keywords.
+While the current CLI produces a brief log of results/errors as the user runs commands, given the nature of agents, users likely would expect a more thorough record in order to examine what actions the agents took while utilizing their account. Utilizing the Python logging module may be most effective and allow flexibility. The module allows to write to a user’s local file to implement more extensive logging beyond the CLI’s current printouts to the console. Record agentic actions, including `datetime, action_taken, user_approval, result (Success or Failure), error (High Level Description Based Off Stack Trace If it Exists)`, to ensure that the dynamic information is included efficiently within a file that can then be scanned for certain keywords.
+
+A basic logging example is the following: 
+
+```
+>>> import logging 
+>>> logging.basicConfig( 
+...    filename='glados_audit.log', 
+...    level=logging.INFO, 
+... ) 
+>>> logging.error("Something went wrong!")
+```
+
+By saving the logs to a file, such as “glados_audit.log” as in the above example, instead of simply printing to a terminal, we can ensure that the dynamic information is included efficiently within a file that can then be scanned for certain keywords. 
 
 ### 4.3 MCP Facade
 The system follows a facade architecture: a local process on the user's machine sits between the agent (running under the Claude Code TUI, or any equivalent host) and the remote REST API. The facade is the only component that holds credentials, makes outbound REST calls, and decides what crosses the trust boundary to the agent. Data classified high-sensitivity does not flow to the agent through facade responses; instead, the facade places it in a handoff region on the local filesystem, and the user performs an explicit gesture to release it. The mechanism for that gesture is intentionally underspecified at this layer; suggested implementations are listed below.
@@ -296,21 +338,28 @@ To ensure that the features associated with enabling agentic workflows in GLADOS
 
 This testing would verify that end-to-end operations of a local agent using the locally hosted MCP servers to call the REST API endpoints, be recorded in the audit log, and then return the expected payload. This would ensure that the correct sequency of calls could occur. 
 
-This test would use the addnums experiment (located here: [Add Nums Experiment](https://github.com/AutomatingSciencePipeline/Monorepo/blob/main/example_experiments/python/addNums.py)) 
+This test would use the addnums experiment (located here: [Add Nums Experiment](https://github.com/AutomatingSciencePipeline/Monorepo/blob/main/example_experiments/python/addNums.py)) with a description of the experiment [on this documentation page](https://github.com/AutomatingSciencePipeline/Monorepo/blob/main/docs/docs/deafult-exp-guides/addNums.md).
+
+This test would require a full sequence of calls to execute the experiment: Starting with authentication, then proceeding to submitting and running the experiment, querying to check on experiment status, and downloading all relevant experiment artifacts. See security testing in 8.3 which elaborates on some of the security standards that need to be tested for these actions; however, this end-to-end testing will check for functionality first. 
 
 A 32 GB VM for running local models can be available at request from the CSSE Department system admin.  
 
-Using Ollama to run models locally will enable effective model management- utilize a model with Ollama that uses approximately 8B-16B parameter size model in order to not use resources available via the VM effectively. 
+Using Ollama to run models locally will enable effective model management- utilize a model with Ollama that uses approximately 8B-16B parameter size model in order to use resources available via the VM effectively. 
 
 ### 8.2 Unit Testing of MCP Endpoints 
 
 Create a test suite composed of unit tests that mock the Next.js REST endpoints to ensure that the MCP server calls in order to test conformation of the functional invariants defined in 3.1. 
 
-To test the structural invariant, each MCP tool call should result in one HTTP request sent to the REST endpoint, with successful calls tested as well as calls that require retries before surfaced failure. 
+- To test the structural invariant, each MCP tool call should result in one HTTP request sent to the REST endpoint, with successful calls tested as well as calls that require retries before surfaced failure. 
+- To test the payload invariant, create unit tests with a variety of arguments to ensure that the corresponding REST requests has the proper schema with no incorrect changing of the values. 
+- To test the response invariant, mock custom payloads from the REST API to ensure that the MCP server does not create, add, or remove fabricated data in the responses.
 
-To test the payload invariant, create unit tests with a variety of arguments to ensure that the corresponding REST requests has the proper schema with no incorrect changing of the values. 
+### 8.3 Security Evaluation Involving Integration and Component Testing
 
-To test the response invariant, mock custom payloads from the REST API to ensure that the MCP server does not create, add, or remove fabricated data in the responses.
+To ensure our security architecture functions as expected, a variety of tests, mainly following under integration and component level testing, are recommended.
+
+- Data access for the CHELL is restricted to protect against improper leakage of credentials, experiment results, and other sensitive information. To test this, walk through a full experiment creation process using an agent, with one walk through being happy path and another with a purposefully-thrown crash. Then monitor all generated telemetry streams for sensitive data to see if any such information was logged by the agent.
+- The audit log collection is intended to record mutable actions taken by agents interacting with the system (full schema of the collection included in the architecture section). To test this, execute a series of mutable actions (running a new experiment, updating experiment information, deleting experiment information, or any other mutable actions that are implemented), and confirm that the collection writes that occurred to log these actions properly record each. To ensure full coverage beyond just the happy path testing, temporarily scale down the MongoDB pods (which should cause the health check associated with the audit log to fail), and then attempt to make the same mutable actions. Each action should be denied, with degraded-mode error returned as its reason.
  
 
 ## 9. Unresolved decisions
@@ -322,5 +371,8 @@ To test the response invariant, mock custom payloads from the REST API to ensure
 - [RFC8628](https://www.rfc-editor.org/rfc/rfc8628)
 - [MCP Specification](https://modelcontextprotocol.io/specification/2025-11-25)
 - [Github API Request Limit](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api?apiVersion=2026-03-10)
+- [Logging in Python](https://realpython.com/python-logging/)
+- [Audit Logs in MongoDB](https://oneuptime.com/blog/post/2026-03-31-mongodb-how-to-implement-audit-logging-in-mongodb/view)
+- [Audit Logs with Agentic Systems](https://www.loginradius.com/blog/engineering/auditing-and-logging-ai-agent-activity)
 
 
