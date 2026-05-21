@@ -11,14 +11,33 @@ For developers, an MkDocs setup is included as part of the dev install script.
 ## Updating
 Updating documentation is as simple as updating Markdown files, all contained within the `docs` folder in the Monorepo. 
 
-To preview your changes, this will build the site locally, with automatic updates as you make changes:
+To preview your chages, follow these steps:
+
+Starting in the root directory, navigate to the outermost docs directory.
 
 ```sh
-pipenv run mkdocs serve
+cd docs
 ```
 
-!!! note
-    For any mkdocs commands, you must be in the outermost `docs` folder for it to find your files correctly.
+Create and activate a fresh virtual environment.
+
+```sh
+python3 -m venv venv
+source venv/bin/activate
+```
+
+Install the required dependencies.
+
+```sh
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Start up the local dev server to preview changes.
+
+```sh
+mkdocs serve
+```
 
 ## Deploying
 
