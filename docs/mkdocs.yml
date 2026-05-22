@@ -16,12 +16,13 @@ nav:
     - Deployment: tutorial/deployment.md
   - Documentation:
     - Updating Documentation: documentation/guide.md
+    - Architecture Documentation: infrastructure/architecture.md
+    - Agentic Implementation Plan: infrastructure/agentic_plan.md
   - Infrastructure:
     - Kubernetes: infrastructure/kubernetes.md
     - VMs: infrastructure/vms.md
     - Cluster Upgrade: infrastructure/cluster_update.md
     - Used Technologies: infrastructure/used_technologies.md
-    - Architecture Documentation: infrastructure/architecture.md
   - Developer Help:
     - Developer Setup: developerhelp/setup.md
     - Helpful Commands: developerhelp/helpful_commands.md
