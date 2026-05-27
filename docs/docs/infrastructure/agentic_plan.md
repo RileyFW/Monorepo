@@ -361,10 +361,7 @@ To ensure our security architecture functions as expected, a variety of tests, m
 - Data access for the CHELL is restricted to protect against improper leakage of credentials, experiment results, and other sensitive information. To test this, walk through a full experiment creation process using an agent, with one walk through being happy path and another with a purposefully-thrown crash. Then monitor all generated telemetry streams for sensitive data to see if any such information was logged by the agent.
 - The audit log collection is intended to record mutable actions taken by agents interacting with the system (full schema of the collection included in the architecture section). To test this, execute a series of mutable actions (running a new experiment, updating experiment information, deleting experiment information, or any other mutable actions that are implemented), and confirm that the collection writes that occurred to log these actions properly record each. To ensure full coverage beyond just the happy path testing, temporarily scale down the MongoDB pods (which should cause the health check associated with the audit log to fail), and then attempt to make the same mutable actions. Each action should be denied, with degraded-mode error returned as its reason.
  
-
-## 9. Unresolved decisions
-
-## 10. References
+## 9. References
 
 - [Utilizing Ollama](https://www.mindstudio.ai/blog/ollama-run-ai-models-locally-claude-code-workflows)
 - [RFC7662](https://www.rfc-editor.org/rfc/rfc7662)
@@ -374,5 +371,3 @@ To ensure our security architecture functions as expected, a variety of tests, m
 - [Logging in Python](https://realpython.com/python-logging/)
 - [Audit Logs in MongoDB](https://oneuptime.com/blog/post/2026-03-31-mongodb-how-to-implement-audit-logging-in-mongodb/view)
 - [Audit Logs with Agentic Systems](https://www.loginradius.com/blog/engineering/auditing-and-logging-ai-agent-activity)
-
-
