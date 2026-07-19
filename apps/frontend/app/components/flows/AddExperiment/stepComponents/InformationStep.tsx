@@ -163,6 +163,26 @@ export const InformationStep = ({ form, validationErrors, setValidationErrors, .
                         />
                     </div>
                 </InputSection>
+                <InputSection header={'Python Dependencies (requirements.txt)'}>
+                    <div className='sm:col-span-4'>
+                        <textarea
+                            {...form.getInputProps('pipRequirements')}
+                            rows={4}
+                            placeholder={'One pip requirement per line, e.g.\nnumpy==1.26.4\nscipy'}
+                            className='block w-full rounded-md border border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm font-mono'
+                        />
+                    </div>
+                </InputSection>
+                <InputSection header={'System Packages (apt)'}>
+                    <div className='sm:col-span-4'>
+                        <textarea
+                            {...form.getInputProps('aptPackages')}
+                            rows={2}
+                            placeholder={'apt package names, separated by spaces or newlines, e.g.\nffmpeg libgomp1'}
+                            className='block w-full rounded-md border border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm font-mono'
+                        />
+                    </div>
+                </InputSection>
                 <InputSection header={'Config File Format'}>
                     <Menu as='div' className='relative' ref={configMenuRef}>
                         <Menu.Button 

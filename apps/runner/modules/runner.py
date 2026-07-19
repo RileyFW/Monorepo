@@ -18,7 +18,25 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 PROCESS_OUT_STREAM = 0
 PROCESS_ERROR_STREAM = 1
 
+# Environment variables that are safe to expose to user-submitted trial code.
+# User experiments are untrusted and run as a subprocess, so they must NOT
+# inherit the runner's full environment: doing so leaks the secrets injected
+# into the runner pod (GMAIL_CREDS, MONGODB_PORT, BACKEND_PORT, etc.) to
+# arbitrary uploaded code. We pass through only the variables actually needed to
+# locate and launch interpreters/binaries; everything else is withheld.
+_TRIAL_ENV_ALLOWLIST = ('PATH', 'HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ', 'TMPDIR', 'JAVA_OPTS')
+
 explogger = get_experiment_logger()
+
+
+def _build_trial_env():
+    """Build a sanitized environment for user-submitted trial subprocesses.
+
+    Returns a copy of the runner's environment restricted to
+    ``_TRIAL_ENV_ALLOWLIST`` so untrusted trial code cannot read the runner's
+    injected secrets.
+    """
+    return {key: os.environ[key] for key in _TRIAL_ENV_ALLOWLIST if key in os.environ}
 
 
 def _get_data(process: 'Popen[str]', trialRun: int, trialTimeout: int):
@@ -55,15 +73,18 @@ def _run_trial(experiment: ExperimentData, config_path: str, trialRun: int):
     # set the paths
     os.mkdir(f'trial{trialRun}')
     os.chdir(f'trial{trialRun}')
+    # Untrusted user code: run with a sanitized environment so it cannot read
+    # the runner's secrets (see _build_trial_env).
+    trial_env = _build_trial_env()
     if experiment.experimentType == ExperimentType.PYTHON:
-        with Popen(['python', "../" + experiment.file, config_path], stdout=PIPE, stdin=PIPE, stderr=PIPE, encoding='utf8') as process:
+        with Popen(['python', "../" + experiment.file, config_path], stdout=PIPE, stdin=PIPE, stderr=PIPE, encoding='utf8', env=trial_env) as process:
             _get_data(process, trialRun, experiment.timeout)
     elif experiment.experimentType == ExperimentType.JAVA:
-        with Popen(['java', '-jar', "../" + experiment.file, config_path], stdout=PIPE, stdin=PIPE, stderr=PIPE, encoding='utf8') as process:
+        with Popen(['java', '-jar', "../" + experiment.file, config_path], stdout=PIPE, stdin=PIPE, stderr=PIPE, encoding='utf8', env=trial_env) as process:
             _get_data(process, trialRun, experiment.timeout)
     elif experiment.experimentType == ExperimentType.C:
-        Popen(['chmod', '+x', "../" + experiment.file], stdout=PIPE, stdin=PIPE, stderr=PIPE, encoding='utf8')
-        with Popen(['../' + experiment.file, config_path], stdout=PIPE, stdin=PIPE, stderr=PIPE, encoding='utf8') as process:
+        Popen(['chmod', '+x', "../" + experiment.file], stdout=PIPE, stdin=PIPE, stderr=PIPE, encoding='utf8', env=trial_env)
+        with Popen(['../' + experiment.file, config_path], stdout=PIPE, stdin=PIPE, stderr=PIPE, encoding='utf8', env=trial_env) as process:
             _get_data(process, trialRun, experiment.timeout)
 
 

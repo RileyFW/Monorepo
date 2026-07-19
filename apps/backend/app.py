@@ -2,7 +2,7 @@
 import io
 import threading
 import base64
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 import os
 from bson.binary import Binary
 from flask import Flask, Response, request, jsonify, send_file
@@ -11,13 +11,18 @@ import pymongo
 from modules.mongo import upload_experiment_aggregated_results, upload_experiment_zip, upload_log_file, verify_mongo_connection, check_insert_default_experiments, download_experiment_file, get_experiment, update_exp_value
 
 from spawn_runner import create_job, create_job_object
+from build_image import build_experiment_image
 flaskApp = Flask(__name__)
 
 config.load_incluster_config()
 BATCH_API = client.BatchV1Api()
+CORE_API = client.CoreV1Api()
 
-MAX_WORKERS = 1
-executor = ProcessPoolExecutor(MAX_WORKERS)
+# Experiment submission runs the (possibly long) build + Job spawn off the request
+# thread. Threads (not processes) so the shared k8s clients above are reused and
+# no experiment payload needs pickling.
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", "4"))
+executor = ThreadPoolExecutor(MAX_WORKERS)
 
 # Mongo Setup
 # create the mongo client
@@ -58,12 +63,46 @@ def get_queue():
 def recv_experiment():
     """The query to run an experiment"""
     data = request.get_json()
-    executor.submit(spawn_job, data)
+    future = executor.submit(spawn_job, data)
+    future.add_done_callback(_log_spawn_result)
     return Response(status=200)
 
+def _log_spawn_result(future):
+    """Surface exceptions raised by the background spawn_job worker.
+
+    ThreadPoolExecutor stores a worker's exception on the Future and never
+    re-raises it, so without this callback a failed experiment launch (e.g. an
+    image build error or a Kubernetes API 403) would vanish silently -- the
+    /experiment request has already returned 200 by the time it runs.
+    """
+    error = future.exception()
+    if error is not None:
+        flaskApp.logger.error("Experiment launch failed in background worker", exc_info=error)
+
 def spawn_job(experiment_data):
-    """Function for creating a job"""
-    job = create_job_object(experiment_data)
+    """Build the per-experiment image (if dependencies are declared) then spawn the runner Job.
+
+    The /experiment payload only carries the experiment id, so the declared
+    dependencies are read from MongoDB and attached before building. If that
+    lookup fails or no dependencies are declared, build_experiment_image returns
+    None and create_job_object falls back to the default runner image (unchanged
+    behaviour for experiments without declared dependencies).
+    """
+    try:
+        stored = get_experiment(experiment_data['experiment']['id'], mongoClient)
+        experiment_data['experiment']['pipRequirements'] = stored.get('pipRequirements')
+        experiment_data['experiment']['aptPackages'] = stored.get('aptPackages')
+    except Exception:
+        # Non-fatal: fall back to the default runner image (no per-experiment build),
+        # but log it so a Mongo/lookup problem is visible rather than silent.
+        flaskApp.logger.warning(
+            "Could not read declared dependencies for experiment %s; proceeding without a per-experiment image",
+            experiment_data.get('experiment', {}).get('id'),
+            exc_info=True,
+        )
+
+    image_override = build_experiment_image(experiment_data, BATCH_API, CORE_API)
+    job = create_job_object(experiment_data, image_override=image_override)
     create_job(BATCH_API, job)
     
 @flaskApp.post("/cancelExperiment")

@@ -4,9 +4,14 @@ metadata:
   name: job-creator
   namespace: default
 rules:
+# get/list/watch added so the backend can poll the Kaniko build Job to completion (Phase 2)
 - apiGroups: ["batch"]
   resources: ["jobs"]
-  verbs: ["create", "delete"]
+  verbs: ["create", "delete", "get", "list", "watch"]
+# configmaps: the backend stages the Kaniko build context in a ConfigMap (Phase 2)
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create", "delete", "get"]
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "list", "watch"]

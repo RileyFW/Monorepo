@@ -14,6 +14,28 @@ spec:
         image: gladospipeline/glados-runner:main
         imagePullPolicy: Always
         command: []
+        # Hardening for a pod that executes arbitrary user-submitted code.
+        # NOTE: runAsNonRoot / readOnlyRootFilesystem are intentionally omitted
+        # because the runner image runs as root and writes to its working dir on
+        # the root filesystem; enabling those requires a non-root user in the
+        # runner Dockerfile plus a writable volume mount for the work dir.
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        # Bound resource usage so a single experiment cannot starve its node.
+        # Tune these to your workloads; too-low limits will kill legitimate runs
+        # (the memory limit in particular triggers an OOM-kill).
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+          limits:
+            cpu: "4"
+            memory: "10Gi"
         env:
         - name: MONGODB_PORT
           valueFrom:

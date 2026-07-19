@@ -1,0 +1,26 @@
+# Declarative form of the in-cluster dev registry used by the Tilt / minikube
+# flow. This is the same registry that .devcontainer/post-start.sh creates
+# imperatively via:
+#
+#     ctlptl create cluster minikube --registry=ctlptl-registry
+#
+# It is managed by ctlptl (https://github.com/tilt-dev/ctlptl), NOT kubectl.
+# Apply / reconcile it idempotently with:
+#
+#     ctlptl apply -f kubernetes_init/registry/registry.yaml
+#
+# ctlptl runs a `registry:2` container, joins it to the minikube docker network,
+# and publishes a `local-registry-hosting` ConfigMap in the `kube-public`
+# namespace (the KEP-1755 discovery standard). Tilt reads that ConfigMap and
+# automatically uses this registry as its default push target, and in-cluster
+# pods pull from it at `ctlptl-registry:5000`.
+#
+# Scope: DEV / minikube only. Not used in the production kubernetes_init
+# backend / frontend / mongodb manifests.
+#
+# The host port is intentionally left unset so ctlptl assigns a free one on each
+# cluster creation (matching the --registry flag behaviour); the in-cluster
+# address is always `ctlptl-registry:5000` regardless of the host port.
+apiVersion: ctlptl.dev/v1alpha1
+kind: Registry
+name: ctlptl-registry

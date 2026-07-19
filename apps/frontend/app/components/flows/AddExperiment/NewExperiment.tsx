@@ -124,6 +124,8 @@ const NewExperiment = ({ formState, setFormState, copyID, setCopyId, isDefault, 
 			status: 'CREATED',
 			experimentExecutable: '',
 			configFileFormat: '',
+			pipRequirements: '',
+			aptPackages: '',
 		},
 		validate: joiResolver(experimentSchema),
 	});
@@ -156,7 +158,9 @@ const NewExperiment = ({ formState, setFormState, copyID, setCopyId, isDefault, 
 								file: newFileId,
 								status: 'CREATED',
 								experimentExecutable: expInfo['experimentExecutable'],
-								configFileFormat: expInfo['configFileFormat']
+								configFileFormat: expInfo['configFileFormat'],
+								pipRequirements: expInfo['pipRequirements'] ?? '',
+								aptPackages: expInfo['aptPackages'] ?? ''
 							});
 							setCopyId(null);
 							setStatus(FormStates.Info);
@@ -183,7 +187,9 @@ const NewExperiment = ({ formState, setFormState, copyID, setCopyId, isDefault, 
 								file: expInfo['file'],
 								status: 'CREATED',
 								experimentExecutable: expInfo['experimentExecutable'],
-								configFileFormat: expInfo['configFileFormat']
+								configFileFormat: expInfo['configFileFormat'],
+								pipRequirements: expInfo['pipRequirements'] ?? '',
+								aptPackages: expInfo['aptPackages'] ?? ''
 							});
 							setFileId(expInfo['file']);
 							setCopyId(null);
@@ -233,7 +239,9 @@ const NewExperiment = ({ formState, setFormState, copyID, setCopyId, isDefault, 
 			status: 'CREATED',
 			sendEmail: expInfo['sendEmail'],
 			experimentExecutable: expInfo['experimentExecutable'],
-			configFileFormat: expInfo['configFileFormat']
+			configFileFormat: expInfo['configFileFormat'],
+			pipRequirements: expInfo['pipRequirements'] ?? '',
+			aptPackages: expInfo['aptPackages'] ?? ''
 		});
 
 		setCopyId(null);
