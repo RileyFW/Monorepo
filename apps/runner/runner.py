@@ -213,7 +213,7 @@ def close_shard_run(expId: DocumentId, shardIndex: int):
     explogger.info(f'Exiting experiment {expId} shard {shardIndex}')
     try:
         close_experiment_logger()
-        upload_experiment_log(expId)
+        upload_experiment_log(expId, shard_label=f"Shard {shardIndex}")
     except Exception as err:  # pylint: disable=broad-exception-caught
         syslogger.error("Failed to upload log for shard %s: %s", shardIndex, err)
     try:
@@ -463,7 +463,7 @@ def _finish_experiment(exp_id: DocumentId, status: str, experiment: typing.Optio
         send_email(experiment, status)
     try:
         close_experiment_logger()
-        upload_experiment_log(exp_id)
+        upload_experiment_log(exp_id, shard_label="Finalize")
     except Exception as err:  # pylint: disable=broad-exception-caught
         syslogger.error("Finalize: failed to upload finalize log: %s", err)
     remove_downloaded_directory(exp_id)

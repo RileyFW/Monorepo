@@ -1,6 +1,7 @@
 import os
 import base64
 import logging
+import typing
 from bson.binary import Binary
 import requests
 
@@ -69,11 +70,14 @@ def upload_experiment_zip(experiment: ExperimentData, encoded: Binary):
     }
     _call_backend(url, payload, "inserted zip into mongodb with id")
 
-def upload_experiment_log(experimentId: DocumentId):
+def upload_experiment_log(experimentId: DocumentId, shard_label: typing.Optional[str] = None):
     """Upload the experiment log
 
     Args:
         experimentId (DocumentId): experiment data
+        shard_label (str, optional): which shard produced this log (e.g. "Shard 0"
+            or "Finalize"). A sharded experiment uploads one log per shard plus a
+            finalize log, so this lets the system-log viewer label each section.
 
     Raises:
         GladosInternalError: error raised
@@ -98,6 +102,8 @@ def upload_experiment_log(experimentId: DocumentId):
         "experimentId": experimentId,
         "logContents": contents
     }
+    if shard_label is not None:
+        payload["shardLabel"] = shard_label
     _call_backend(url, payload, "inserted log file into mongodb with id")
     
 def get_experiment_with_id(experimentId: str):

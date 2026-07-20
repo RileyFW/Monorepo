@@ -36,10 +36,13 @@ def upload_experiment_zip(experimentId: str, encoded: Binary, mongoClient: pymon
     except Exception as err:
         raise Exception("Encountered error while storing results zip in MongoDB") from err
     
-def upload_log_file(experimentId: str, contents: str, mongoClient: pymongo.MongoClient):
+def upload_log_file(experimentId: str, contents: str, mongoClient: pymongo.MongoClient, shardLabel: str = None):
     logsBucket = GridFSBucket(mongoClient["gladosdb"], bucket_name='logsBucket')
     try:
-        resultId = logsBucket.upload_from_stream(f"log{experimentId}.txt", contents.encode('utf-8'), metadata={"experimentId": experimentId})
+        metadata = {"experimentId": experimentId}
+        if shardLabel is not None:
+            metadata["shardLabel"] = shardLabel
+        resultId = logsBucket.upload_from_stream(f"log{experimentId}.txt", contents.encode('utf-8'), metadata=metadata)
         return str(resultId)
     except Exception as err:
         raise Exception("Encountered error while storing log file in MongoDB") from err

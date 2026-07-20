@@ -49,11 +49,16 @@ export async function GET(
 
         const logsBucket = new GridFSBucket(db, { bucketName: 'logsBucket' });
 
+        // A sharded experiment (see the phase5 multi-pod runner) uploads one log
+        // file per shard plus one from the finalize pod, so there is no longer a
+        // single log file per experiment. Gather every matching file, oldest
+        // first, and concatenate them into one document.
         const results = await logsBucket
             .find({ 'metadata.experimentId': idOfLogFile })
+            .sort({ uploadDate: 1 })
             .toArray();
 
-        if (results.length !== 1) {
+        if (results.length === 0) {
             return NextResponse.json(
                 {
                     response: `Experiment Log '${idOfLogFile}' not found. Please contact the GLADOS team for further troubleshooting.`,
@@ -62,16 +67,36 @@ export async function GET(
             );
         }
 
-        const downloadStream = logsBucket.openDownloadStream(results[0]._id);
-        const chunks: Buffer[] = [];
-
-        const contents = await new Promise<string>((resolve, reject) => {
-            downloadStream.on('data', (chunk) => chunks.push(chunk));
-            downloadStream.on('end', () => {
-                resolve(Buffer.concat(chunks as unknown as Uint8Array[]).toString('utf-8'));
+        const readFile = (fileId: typeof results[number]['_id']) => {
+            const downloadStream = logsBucket.openDownloadStream(fileId);
+            const chunks: Buffer[] = [];
+            return new Promise<string>((resolve, reject) => {
+                downloadStream.on('data', (chunk) => chunks.push(chunk));
+                downloadStream.on('end', () => {
+                    resolve(Buffer.concat(chunks as unknown as Uint8Array[]).toString('utf-8'));
+                });
+                downloadStream.on('error', (err) => reject(err));
             });
-            downloadStream.on('error', (err) => reject(err));
-        });
+        };
+
+        const sections = await Promise.all(results.map(async (file, index) => {
+            const body = await readFile(file._id);
+            // The runner tags each shard's upload with a label ("Shard 0",
+            // "Finalize", ...); fall back to positional numbering for older logs
+            // uploaded before labelling existed.
+            const label = (file.metadata?.shardLabel as string | undefined)
+                ?? `Log ${index + 1} of ${results.length}`;
+            return { label, body };
+        }));
+
+        // With a single log file, return it verbatim; only add section headers
+        // when there are multiple (sharded) logs so we don't disturb the common
+        // single-runner case.
+        const contents = sections.length === 1
+            ? sections[0].body
+            : sections
+                .map((section) => `===== ${section.label} =====\n${section.body}`)
+                .join('\n\n');
 
         if (contents.length === 0) {
             return new NextResponse(`Experiment Log '${idOfLogFile}' was empty.`, { status: 200 });
