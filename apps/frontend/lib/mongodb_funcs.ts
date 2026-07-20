@@ -19,6 +19,10 @@ export async function submitExperimentCLI(values: Partial<ExperimentData>, userI
         values.trialResultLineNumber = 1;
     }
     values.trialResultLineNumber = Number(values.trialResultLineNumber);
+    // The "Runner Pods" number input yields a string; persist it as a number so
+    // the backend's shard-completion check (finishedShards >= workers) compares
+    // numbers instead of raising on an int-vs-string comparison.
+    values.workers = Number(values.workers) || 1;
     const expData: Partial<ExperimentData> = values;
 
     const client = await clientPromise;
@@ -49,6 +53,10 @@ export async function submitExperiment(values: Partial<ExperimentData>, userId: 
         values.trialResultLineNumber = 1;
     }
     values.trialResultLineNumber = Number(values.trialResultLineNumber);
+    // The "Runner Pods" number input yields a string; persist it as a number so
+    // the backend's shard-completion check (finishedShards >= workers) compares
+    // numbers instead of raising on an int-vs-string comparison.
+    values.workers = Number(values.workers) || 1;
     const expData: Partial<ExperimentData> = values;
 
     const session = await auth();

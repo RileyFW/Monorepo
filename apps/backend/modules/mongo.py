@@ -136,7 +136,14 @@ def increment_finished_shards(expId: str, mongoClient: pymongo.MongoClient):
     )
     if updated is None:
         raise Exception("Could not find experiment to record shard completion!")
-    return updated.get("finishedShards", 0), updated.get("workers", 1)
+    # Coerce to int: `workers` can be persisted as a string (the frontend number
+    # input yields a string), and `finishedShards >= workers` with a str operand
+    # raises TypeError, which would swallow the finalize trigger and leave the
+    # experiment stuck un-finished. int() here keeps the completion check robust
+    # even for experiments already stored with a string worker count.
+    finished_shards = int(updated.get("finishedShards", 0) or 0)
+    workers = int(updated.get("workers", 1) or 1)
+    return finished_shards, workers
 
 def upload_partial_results(experimentId: str, shardIndex: int, results: str, mongoClient: pymongo.MongoClient):
     """Store one shard's partial results CSV (its rows + a header) in GridFS.
