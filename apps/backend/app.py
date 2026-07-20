@@ -57,7 +57,10 @@ def hello_world():
 @flaskApp.get("/queue")
 def get_queue():
     """The query to get the size of the queue"""
-    # There must be a cleaner way to access this queue size...
+    # ThreadPoolExecutor exposes no public API for the pending-work count, so we
+    # read the internal dict directly. pylint can't see this dynamically-created
+    # member and flags protected-access; both are expected here.
+    # pylint: disable=protected-access,no-member
     return jsonify({"queueSize": len(executor._pending_work_items)})
 
 @flaskApp.post("/experiment")
