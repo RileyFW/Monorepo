@@ -70,6 +70,20 @@ class TestIncrementFinishedShards(unittest.TestCase):
         at_threshold = [finished for finished, workers in results if finished >= workers]
         self.assertEqual(at_threshold, [3])
 
+    def test_string_worker_count_still_detects_threshold(self):
+        # The frontend number input can persist `workers` as a string; the helper
+        # must coerce it so `finished >= workers` compares ints instead of raising
+        # TypeError (int vs str) -- which previously swallowed the finalize trigger
+        # and left multi-pod experiments stuck un-finished.
+        client = _FakeClient({"finishedShards": 0, "workers": "3"})
+        results = [increment_finished_shards(FAKE_OID, client) for _ in range(3)]
+        self.assertEqual(results, [(1, 3), (2, 3), (3, 3)])
+        for finished, workers in results:
+            self.assertIsInstance(finished, int)
+            self.assertIsInstance(workers, int)
+        at_threshold = [finished for finished, workers in results if finished >= workers]
+        self.assertEqual(at_threshold, [3])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
