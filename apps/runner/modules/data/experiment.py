@@ -36,6 +36,12 @@ class ExperimentData(BaseModel):
     postProcess = False
     configFileFormat : str
 
+    # Optional dependency manifests declared by the user. These are layered into a
+    # per-experiment image at build time by the backend (see build_image.py); the
+    # runner does not need to act on them directly.
+    pipRequirements: Optional[str] = None
+    aptPackages: Optional[str] = None
+
     hyperparameters: Dict[str, Parameter]
     configs = {}  #Will be set Later
 
@@ -47,6 +53,11 @@ class ExperimentData(BaseModel):
     passes: int = 0
     fails: int = 0
     status = "RUNNING"
+
+    # Number of runner-pod shards this experiment is spread across. The trials are
+    # partitioned by (trialNum % workers == JOB_COMPLETION_INDEX). Defaults to 1
+    # (single pod, unchanged behavior) when the experiment doc omits it.
+    workers: int = 1
 
     @validator('trialResult')
     @classmethod

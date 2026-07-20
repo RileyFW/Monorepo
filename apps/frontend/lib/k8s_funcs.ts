@@ -24,15 +24,32 @@ export async function getK8sLogs(expId: string) {
 
     const jobName = `runner-${expId}`;
     const result = k8sApi.listNamespacedPod({ namespace: 'default' }).then(async (res) => {
-        // This will return a V1PodList object
-        const podList = res;
-        const podName = podList.items.find((pod) => pod.metadata?.name?.startsWith(jobName))?.metadata?.name;
-        if (!podName) {
+        // An experiment now runs as an Indexed Job with one pod per shard
+        // (plus a one-shot runner-<expId>-finalize pod), so gather and label the
+        // logs from every matching pod rather than just the first one.
+        const pods = res.items
+            .filter((pod) => pod.metadata?.name?.startsWith(jobName))
+            .sort((a, b) => (a.metadata?.name ?? '').localeCompare(b.metadata?.name ?? ''));
+        if (pods.length === 0) {
             throw new Error(`Pod not found for experiment ID: ${expId}`);
         }
 
-        const log = await k8sApi.readNamespacedPodLog({ name: podName, namespace: 'default' });
-        return log;
+        const sections = await Promise.all(pods.map(async (pod) => {
+            const podName = pod.metadata?.name as string;
+            // A shard's index is exposed on the pod via the standard Job annotation.
+            const shardIndex = pod.metadata?.annotations?.['batch.kubernetes.io/job-completion-index'];
+            const label = podName.endsWith('finalize') || podName.includes('-finalize-')
+                ? 'Finalize'
+                : shardIndex !== undefined ? `Shard ${shardIndex}` : podName;
+            try {
+                const log = await k8sApi.readNamespacedPodLog({ name: podName, namespace: 'default' });
+                return `===== ${label} (${podName}) =====\n${log}`;
+            } catch (error) {
+                return `===== ${label} (${podName}) =====\n[log unavailable: ${String(error)}]`;
+            }
+        }));
+
+        return sections.join('\n\n');
     });
 
     return result;

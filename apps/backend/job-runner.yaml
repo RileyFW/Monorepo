@@ -8,13 +8,57 @@ spec:
     metadata:
       labels:
         app: GLADOS
+        # Distinct label the runner NetworkPolicy selects on. `app: GLADOS` is
+        # shared with other GLADOS components (e.g. the backend), so it cannot be
+        # the selector for the runner-only egress lockdown.
+        role: runner
     spec:
       containers:
       - name: runner
         image: gladospipeline/glados-runner:main
         imagePullPolicy: Always
         command: []
+        # The runner executes untrusted user-submitted code. It runs non-root
+        # (enforced by the pod securityContext below) with a read-only root
+        # filesystem; all writes go to the emptyDir volumes mounted at /work
+        # (the working dir) and /tmp. Dependencies are baked into the image at
+        # build time, so nothing is installed at runtime.
+        workingDir: /work
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - name: work
+          mountPath: /work
+        - name: tmp
+          mountPath: /tmp
+        # Bound resource usage so a single experiment cannot starve its node.
+        # Tune these to your workloads; too-low limits will kill legitimate runs
+        # (the memory limit in particular triggers an OOM-kill).
+        #
+        # NOTE: no CPU *limit* is set on purpose. A hard CPU limit is enforced via
+        # the cgroup CFS quota (cpu.cfs_quota_us), which the WSL2 kernel used by
+        # the minikube dev environment rejects with EINVAL ("invalid argument"),
+        # crashing the pod at container init. The CPU *request* below still gives
+        # the scheduler fair-share weighting, and the memory limit is what
+        # actually protects the node from a runaway untrusted experiment. If you
+        # deploy on a cluster whose kernel supports CFS quota, you can add a
+        # `cpu:` under limits here.
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+          limits:
+            memory: "10Gi"
         env:
+        # Writable HOME on the tmp volume (the root filesystem is read-only).
+        - name: HOME
+          value: /tmp
         - name: MONGODB_PORT
           valueFrom:
             secretKeyRef:
@@ -25,11 +69,21 @@ spec:
             secretKeyRef:
               name: secret-env
               key: BACKEND_PORT
-        - name: GMAIL_CREDS
-          valueFrom:
-            secretKeyRef:
-              name: secret-env
-              key: GMAIL_CREDS
+        # NOTE: GMAIL_CREDS is intentionally NOT provided to the runner. Sending
+        # the completion email moved to the backend (POST /sendEmail); the
+        # untrusted runner pod no longer holds Google credentials.
+      # Run as a non-root user; fsGroup makes the emptyDir volumes group-writable
+      # so the process can write to /work and /tmp under readOnlyRootFilesystem.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      volumes:
+      - name: work
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
       restartPolicy: Never
   backoffLimit: 4
   ttlSecondsAfterFinished: 60

@@ -21,6 +21,23 @@ spec:
         env:
         - name: IMAGE_RUNNER
           value: runner
+        # Phase 2 build orchestration (dev/minikube). REGISTRY_HOST is the in-cluster
+        # registry used to push per-experiment images and check the build cache.
+        # RUNNER_BASE_IMAGE is the base the Kaniko build layers deps onto; the bare
+        # `runner-base` value is rewritten by Tilt (match_in_env_vars) to the pushed ref.
+        - name: REGISTRY_HOST
+          value: ctlptl-registry:5000
+        - name: RUNNER_BASE_IMAGE
+          value: runner-base
+        # gVisor sandboxing for runner pods. Makes the backend set
+        # runtimeClassName: gvisor on every runner Job it spawns, so untrusted
+        # user code runs under the runsc user-space kernel. Requires the cluster
+        # to have the gVisor runtime installed (containerd runtime + runsc; see
+        # post-start.sh) -- otherwise runner pods are rejected for referencing a
+        # missing RuntimeClass. Comment this out to run runners on the default
+        # runtime (e.g. on a cluster without runsc installed).
+        - name: RUNNER_RUNTIME_CLASS
+          value: gvisor
         - name: BACKEND_PORT
           valueFrom:
             secretKeyRef:
@@ -41,3 +58,10 @@ spec:
             secretKeyRef:
               name: secret-env
               key: MONGODB_PASSWORD
+        # Gmail credentials for sending completion emails. Moved here from the
+        # runner Job so the untrusted runner pod no longer holds this secret.
+        - name: GMAIL_CREDS
+          valueFrom:
+            secretKeyRef:
+              name: secret-env
+              key: GMAIL_CREDS

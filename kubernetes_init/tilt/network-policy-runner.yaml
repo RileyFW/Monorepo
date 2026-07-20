@@ -1,0 +1,59 @@
+# Egress lockdown for the runner pods.
+#
+# The runner executes untrusted user-submitted code. This policy confines that
+# pod's network access to exactly what the harness needs:
+#   * DNS   -> to resolve the backend service name
+#   * the GLADOS backend -> the runner sends all uploads/downloads/status there
+# Everything else (the in-cluster registry, MongoDB, other pods, the Kubernetes
+# API, and the public internet) is denied. Completion emails are sent by the
+# backend, so the runner needs no external egress for them.
+#
+# ENFORCEMENT: Kubernetes NetworkPolicy is only enforced by a CNI that
+# implements it. The minikube dev cluster must be started with a policy-capable
+# CNI (Calico) for this to take effect -- see .devcontainer/post-start.sh
+# (`--minikube-start-flags=--cni=calico`). With the default CNI this object is
+# accepted but NOT enforced (a no-op).
+#
+# Image pulls are performed by the kubelet/container runtime, not from inside
+# the pod network namespace, so restricting pod egress does not block the runner
+# image being pulled from the registry.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runner-egress-lockdown
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      role: runner
+  policyTypes:
+  - Ingress
+  - Egress
+  # Nothing dials into the runner; deny all ingress.
+  ingress: []
+  egress:
+  # DNS resolution via CoreDNS in kube-system (needed to resolve the backend
+  # service name). The kubernetes.io/metadata.name label is applied to every
+  # namespace automatically by Kubernetes >= 1.21.
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # The GLADOS backend, which the runner talks to for everything. Two selectors
+  # (OR'd) so the same policy matches both the dev/tilt backend (app: backend)
+  # and the production backend (app: GLADOS, tier: backend). Ports are left
+  # unrestricted because the backend port is templated from a secret; confining
+  # the destination to the backend pods is the security boundary.
+  - to:
+    - podSelector:
+        matchLabels:
+          app: backend
+    - podSelector:
+        matchLabels:
+          app: GLADOS
+          tier: backend

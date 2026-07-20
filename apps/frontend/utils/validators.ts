@@ -46,7 +46,9 @@ export const experimentSchema = Joi.object().keys({
 	description: Joi.string(),
 	tags: Joi.array().items(Joi.string().required()),
 	hyperparameters: Joi.array().items(intschema, floatschema, boolschema, strschema, stringlistschema),
-	workers: Joi.number().integer().required(),
+	// Number of runner pods to spread this experiment's trials across. Each pod
+	// runs a disjoint subset of the hyperparameter permutations in parallel.
+	workers: Joi.number().integer().min(1).max(50).required(),
 	configFileFormat: Joi.string().valid('ini', 'yaml').required(),
 });
 

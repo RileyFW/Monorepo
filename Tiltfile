@@ -12,6 +12,8 @@ k8s_yaml([
     "kubernetes_init/tilt/service-frontend.yaml",
     "kubernetes_init/tilt/deployment-backend.yaml",
     "kubernetes_init/tilt/service-backend-dev.yaml",
+    "kubernetes_init/tilt/network-policy-runner.yaml",
+    "kubernetes_init/tilt/runtime-class-gvisor.yaml",
     "helm_packages/mongodb-helm/pvs.yaml"
 ])
 
@@ -71,10 +73,30 @@ docker_build("backend",
     ],
     dockerfile='./apps/backend/backend-dev.Dockerfile')
 
+# In-cluster registry (DEV / minikube)
+# -------------------------------------
+# No default_registry() call is needed here: the cluster is created by ctlptl
+# (see .devcontainer/post-start.sh -> `ctlptl create cluster minikube
+# --registry=ctlptl-registry`), which publishes the `local-registry-hosting`
+# ConfigMap in kube-public. Tilt auto-detects that and pushes all docker_build
+# images to the ctlptl registry; in-cluster pods pull them from
+# `ctlptl-registry:5000`. See kubernetes_init/registry/ for the rationale,
+# the declarative Registry manifest, and verification commands.
+
 # Build the runner
-docker_build("runner", 
-    context='./apps/runner', 
+docker_build("runner",
+    context='./apps/runner',
     dockerfile='./apps/runner/runner.Dockerfile',
+    match_in_env_vars=True)
+
+# Build the runner base image (interpreter + dependency harness layers).
+# The Phase-2 Kaniko build layers user dependencies FROM this base and pushes the
+# result to the in-cluster registry. It is consumed via the backend Deployment's
+# RUNNER_BASE_IMAGE env var (match_in_env_vars below rewrites the bare `runner-base`
+# ref to the pushed image), which is what marks this image as used.
+docker_build("runner-base",
+    context='./apps/runner',
+    dockerfile='./apps/runner/runner-base.Dockerfile',
     match_in_env_vars=True)
 
 # add a command that will run on tilt down to cleanup the pv's that are made by helm
