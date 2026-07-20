@@ -236,7 +236,10 @@ def upload_log():
     # Get JSON requests
     experimentId = json['experimentId']
     logContents = json['logContents']
-    return {'id': upload_log_file(experimentId, logContents, mongoClient)}
+    # Optional: which shard produced this log ("Shard 0", "Finalize", ...) so the
+    # system-log viewer can label each section of a sharded experiment.
+    shardLabel = json.get('shardLabel')
+    return {'id': upload_log_file(experimentId, logContents, mongoClient, shardLabel)}
     
 @flaskApp.get("/mongoPulse")
 def check_mongo():

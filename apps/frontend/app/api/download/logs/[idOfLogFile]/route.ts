@@ -79,14 +79,23 @@ export async function GET(
             });
         };
 
-        const sections = await Promise.all(results.map((file) => readFile(file._id)));
+        const sections = await Promise.all(results.map(async (file, index) => {
+            const body = await readFile(file._id);
+            // The runner tags each shard's upload with a label ("Shard 0",
+            // "Finalize", ...); fall back to positional numbering for older logs
+            // uploaded before labelling existed.
+            const label = (file.metadata?.shardLabel as string | undefined)
+                ?? `Log ${index + 1} of ${results.length}`;
+            return { label, body };
+        }));
+
         // With a single log file, return it verbatim; only add section headers
         // when there are multiple (sharded) logs so we don't disturb the common
         // single-runner case.
         const contents = sections.length === 1
-            ? sections[0]
+            ? sections[0].body
             : sections
-                .map((section, index) => `===== Log ${index + 1} of ${sections.length} =====\n${section}`)
+                .map((section) => `===== ${section.label} =====\n${section.body}`)
                 .join('\n\n');
 
         if (contents.length === 0) {
