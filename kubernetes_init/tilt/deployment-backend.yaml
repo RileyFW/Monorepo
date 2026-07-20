@@ -29,14 +29,15 @@ spec:
           value: ctlptl-registry:5000
         - name: RUNNER_BASE_IMAGE
           value: runner-base
-        # gVisor sandboxing for runner pods (opt-in). Uncomment to make the
-        # backend set runtimeClassName: gvisor on spawned runner Jobs. Requires
-        # the cluster to have the gVisor runtime installed (containerd runtime +
-        # the minikube `gvisor` addon; see post-start.sh) -- otherwise runner
-        # pods will be rejected for referencing a missing RuntimeClass. Left
-        # commented so dev stays runnable until gVisor is confirmed working here.
-        # - name: RUNNER_RUNTIME_CLASS
-        #   value: gvisor
+        # gVisor sandboxing for runner pods. Makes the backend set
+        # runtimeClassName: gvisor on every runner Job it spawns, so untrusted
+        # user code runs under the runsc user-space kernel. Requires the cluster
+        # to have the gVisor runtime installed (containerd runtime + runsc; see
+        # post-start.sh) -- otherwise runner pods are rejected for referencing a
+        # missing RuntimeClass. Comment this out to run runners on the default
+        # runtime (e.g. on a cluster without runsc installed).
+        - name: RUNNER_RUNTIME_CLASS
+          value: gvisor
         - name: BACKEND_PORT
           valueFrom:
             secretKeyRef:
