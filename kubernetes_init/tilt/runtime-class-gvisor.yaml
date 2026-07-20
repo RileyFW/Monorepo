@@ -8,9 +8,11 @@
 # REQUIREMENTS:
 #   * The node's container runtime must be containerd (not docker), and the
 #     gVisor runtime must be installed so containerd has a `runsc` handler. On
-#     the minikube dev cluster this is the `gvisor` addon, which requires the
-#     cluster to be created with --minikube-container-runtime=containerd
-#     (see .devcontainer/post-start.sh).
+#     the minikube dev cluster this is done by installing runsc on the node and
+#     registering a containerd runtime handler (see .devcontainer/post-start.sh;
+#     the `minikube addons enable gvisor` path is NOT used -- its installer image
+#     was removed upstream). The cluster must be created with
+#     --minikube-container-runtime=containerd.
 #
 # This object only DECLARES the runtime. Pods opt in via runtimeClassName, which
 # the backend sets on the runner Job only when RUNNER_RUNTIME_CLASS is configured
