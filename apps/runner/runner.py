@@ -2,7 +2,6 @@
 import os
 import shutil
 import logging
-import subprocess
 import sys
 import json
 import time
@@ -66,39 +65,8 @@ def run_batch_and_catch_exceptions(data: IncomingStartRequest):
         # Unsafe to upload experiment logs files here
         raise err
 
-def install_packages(file_path):
-    try:
-        # Read the packages from the file
-        with open(file_path, "r") as file:
-            packages = file.read().splitlines()
-
-        if not packages:
-            explogger.info("No packages to install.")
-            return
-
-        # Update the package list
-        explogger.info("Updating package list...")
-        subprocess.run(["apt-get", "update"], check=True)
-
-        # Install the packages
-        explogger.info("Installing packages...")
-        subprocess.run(["apt-get", "install", "-y"] + packages, check=True)
-        
-        # Update cache
-        explogger.info("Updating cache...")
-        subprocess.run(["ldconfig"], check=True)
-
-        explogger.info("Packages installed successfully!")
-    except subprocess.CalledProcessError as e:
-        explogger.error(f"Error occurred while running a command: {e}")
-    except FileNotFoundError:
-        explogger.error(f"File '{file_path}' not found.")
-    except Exception as e:
-        explogger.error(f"An unexpected error occurred: {e}")
-
 
 def run_batch(data: IncomingStartRequest):
-    fileWasZip = False
     syslogger.info('Run_Batch starting with data %s', data)
 
     # Obtain most basic experiment info
@@ -170,36 +138,13 @@ def run_batch(data: IncomingStartRequest):
             close_experiment_run(exp_id)
             return
     
-    if experiment.creatorRole == "admin" or experiment.creatorRole == "privileged":
-        explogger.info("User is admin or privileged, installing packages from packages.txt")
-        
-        if os.path.exists("packages.txt"):
-            try:
-                install_packages("packages.txt")
-            except Exception as err:
-                explogger.error("Failed to install packages")
-                explogger.exception(err)
-                os.chdir('../..')
-                close_experiment_run(exp_id)
-        
-        explogger.info("User is admin or privileged, running commands from commandsToRun.txt")
-            
-        if os.path.exists("commandsToRun.txt"):
-            for line in open("commandsToRun.txt"):
-                try:
-                    os.system(line)
-                except Exception as err:
-                    explogger.error(f"Failed to run command: {line}")
-                    explogger.exception(err)
-                    os.chdir('../..')
-                    close_experiment_run(exp_id)
-                    return        
-            
-    # this needs to happen after all dependencies are installed
+    # Dependencies are baked into the per-experiment image at build time (see
+    # backend build_image.py); the runner installs nothing at runtime. This is
+    # required for the hardened runner (non-root + readOnlyRootFilesystem) and
+    # removes the former admin apt-get / arbitrary-command install paths.
     if experiment.experimentType == ExperimentType.ZIP:
         # Recalc the file type
         try:
-            fileWasZip = True
             experiment.experimentType = determine_experiment_file_type(experiment.experimentExecutable)
             # also update experiment.file
             experiment.file = experiment.experimentExecutable
@@ -211,34 +156,6 @@ def run_batch(data: IncomingStartRequest):
             close_experiment_run(exp_id)
             return
       
-    # If it is a python file get the pipreqs
-    if experiment.experimentType == ExperimentType.PYTHON:
-        try:
-            # if the file exists, skip running the command
-            if not os.path.exists("userProvidedFileReqs.txt"):
-                if fileWasZip:
-                    os.system(f"pipreqs --savepath userProvidedFileReqs.txt .")
-                else:
-                    os.system(f"pipreqs --savepath userProvidedFileReqs.txt ExperimentFiles/{exp_id}")
-                explogger.info("Generated pip requirements")
-        except Exception as err:
-            explogger.error("Failed to generate pip requirements")
-            explogger.exception(err)
-            os.chdir('../..')
-            close_experiment_run(exp_id)
-            return
-
-    # check if the new requirements exists
-    if os.path.exists("userProvidedFileReqs.txt"):
-        # do pip install -r userProvidedFileReqs.txt
-        try:
-            os.system(f"pip install -r userProvidedFileReqs.txt")
-        except Exception as err:
-            explogger.error("Failed to install pip requirements")
-            explogger.exception(err)
-            os.chdir('../..')
-            close_experiment_run(exp_id)
-            return
 
     explogger.info(f"Generating configs and downloading to ExperimentFiles/{exp_id}/configFiles")
 

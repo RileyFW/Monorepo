@@ -21,6 +21,14 @@ spec:
         env:
         - name: IMAGE_RUNNER
           value: runner
+        # Phase 2 build orchestration (dev/minikube). REGISTRY_HOST is the in-cluster
+        # registry used to push per-experiment images and check the build cache.
+        # RUNNER_BASE_IMAGE is the base the Kaniko build layers deps onto; the bare
+        # `runner-base` value is rewritten by Tilt (match_in_env_vars) to the pushed ref.
+        - name: REGISTRY_HOST
+          value: ctlptl-registry:5000
+        - name: RUNNER_BASE_IMAGE
+          value: runner-base
         - name: BACKEND_PORT
           valueFrom:
             secretKeyRef:

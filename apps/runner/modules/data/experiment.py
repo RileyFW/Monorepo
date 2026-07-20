@@ -36,6 +36,12 @@ class ExperimentData(BaseModel):
     postProcess = False
     configFileFormat : str
 
+    # Optional dependency manifests declared by the user. These are layered into a
+    # per-experiment image at build time by the backend (see build_image.py); the
+    # runner does not need to act on them directly.
+    pipRequirements: Optional[str] = None
+    aptPackages: Optional[str] = None
+
     hyperparameters: Dict[str, Parameter]
     configs = {}  #Will be set Later
 

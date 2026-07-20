@@ -10,19 +10,29 @@ config.load_incluster_config()
 batch_v1 = client.BatchV1Api()
 RUNNER_PATH = "./job-runner.yaml"
 
-def create_job_object(experiment_data):
-    """Function that creates the job object for the runner"""
+def create_job_object(experiment_data, image_override=None):
+    """Function that creates the job object for the runner.
+
+    If image_override is provided (a per-experiment image built with the user's
+    declared dependencies, see build_image.py), the runner Job runs from it.
+    Otherwise the behaviour is unchanged: the IMAGE_RUNNER env image is used if
+    set, else the default image baked into job-runner.yaml.
+    """
     # Configure Pod template container
     job_name = "runner-" + experiment_data['experiment']['id']
-    
-    job_command = ["python3", "runner.py", json.dumps(experiment_data)]
+
+    # Absolute path: the runner Job sets workingDir to a writable volume (/work),
+    # so the script must be referenced by its baked-in location under /app.
+    job_command = ["python3", "/app/runner.py", json.dumps(experiment_data)]
 
     runner_body = get_yaml_file_body(RUNNER_PATH)
 
     runner_body['metadata']['name'] = job_name
     runner_body['spec']['template']['spec']['containers'][0]['command'] = job_command
-    
-    if os.getenv("IMAGE_RUNNER"):
+
+    if image_override:
+        runner_body['spec']['template']['spec']['containers'][0]['image'] = image_override
+    elif os.getenv("IMAGE_RUNNER"):
         # Get the image name
         image_name = str(os.getenv("IMAGE_RUNNER"))
         runner_body['spec']['template']['spec']['containers'][0]['image'] = image_name

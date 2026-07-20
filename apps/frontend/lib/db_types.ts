@@ -96,4 +96,9 @@ export interface ExperimentData {
     totalExperimentRuns: number;
     experimentExecutable: string;
     configFileFormat: string;
+    // Optional dependency manifests: layered into a per-experiment image at build
+    // time (see backend build_image.py). pipRequirements is requirements.txt
+    // contents; aptPackages is whitespace/newline-separated apt package names.
+    pipRequirements?: string;
+    aptPackages?: string;
 }

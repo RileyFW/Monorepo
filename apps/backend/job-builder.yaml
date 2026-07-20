@@ -1,0 +1,48 @@
+# Template for the per-experiment image BUILD Job (Phase 2).
+#
+# The backend (build_image.py) loads this, fills in the Job/ConfigMap names and
+# the Kaniko args (destination + insecure flags), and creates it. A Kaniko Job
+# builds a small image FROM the runner base with the user's declared pip/apt
+# dependencies layered on top, and pushes it to the in-cluster registry. The
+# backend then spawns the runner Job (job-runner.yaml) FROM the built image.
+#
+# The initContainer stages the build context from a ConfigMap into an emptyDir
+# using `cp -L`: ConfigMap volumes expose their files as symlinks, and Kaniko's
+# COPY would otherwise copy a dangling symlink (verified during the Phase 2
+# spike). Kaniko must see real files.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: builder  # replaced by build_image.py
+  namespace: default
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: GLADOS-builder
+    spec:
+      restartPolicy: Never
+      initContainers:
+      - name: stage-context
+        image: busybox:1.36
+        command: ["sh", "-c", "cp -L /cm/* /workspace/ && ls -la /workspace"]
+        volumeMounts:
+        - name: cm
+          mountPath: /cm
+        - name: context
+          mountPath: /workspace
+      containers:
+      - name: kaniko
+        image: gcr.io/kaniko-project/executor:latest
+        args: []  # replaced by build_image.py (dockerfile/context/destination + insecure flags)
+        volumeMounts:
+        - name: context
+          mountPath: /workspace
+      volumes:
+      - name: cm
+        configMap:
+          name: builder-context  # replaced by build_image.py
+      - name: context
+        emptyDir: {}
