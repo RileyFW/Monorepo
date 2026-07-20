@@ -15,9 +15,8 @@ pymongo = "*"
 pydantic = "==1.10.7"
 pytest-cov = "*"
 pipreqs = "*"
-google-api-python-client = "*"
-google-auth-httplib2 = "*"
-google-auth-oauthlib = "*"
+# Gmail sending moved to the backend, so the runner no longer needs the Google
+# client libraries (removes them from the untrusted runner image).
 websockets = "*"
 pyyaml = "*"
 

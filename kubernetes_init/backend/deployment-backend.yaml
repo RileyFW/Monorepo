@@ -43,3 +43,10 @@ spec:
             secretKeyRef:
               name: secret-env
               key: MONGODB_PASSWORD
+        # Gmail credentials for sending completion emails. Moved here from the
+        # runner Job so the untrusted runner pod no longer holds this secret.
+        - name: GMAIL_CREDS
+          valueFrom:
+            secretKeyRef:
+              name: secret-env
+              key: GMAIL_CREDS

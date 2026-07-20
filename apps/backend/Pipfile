@@ -11,6 +11,11 @@ flask-cors = "*"
 pytest-cov = "*"
 pymongo = "*"
 pylint = "*"
+# Gmail send: the completion-email notification moved here from the runner so
+# the untrusted runner pod no longer needs Google credentials or internet egress.
+google-api-python-client = "*"
+google-auth-httplib2 = "*"
+google-auth-oauthlib = "*"
 
 [dev-packages]
 # libmagic dlls for windows hosts https://pypi.org/project/python-magic/ (when missing, vague errors and it crashes)

@@ -145,6 +145,26 @@ def update_exp_value(experimentId: str, field: str, newValue):
     else:
         raise DatabaseConnectionError("Error updating experiment document!")
 
+def request_completion_email(creator_email: str, name: str, status: str, passes, fails):
+    """Ask the backend to send the experiment-completion email.
+
+    Sending moved to the backend so the untrusted runner pod no longer needs the
+    Gmail credentials or outbound internet access. Best-effort: a failed email
+    must never fail the experiment, so problems are logged and swallowed here.
+    """
+    url = f'http://glados-service-backend:{os.getenv("BACKEND_PORT")}/sendEmail'
+    payload = {
+        "email": creator_email,
+        "name": name,
+        "status": status,
+        "passes": passes,
+        "fails": fails,
+    }
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception as err:  # pylint: disable=broad-exception-caught
+        explogger.error(f"Failed to request completion email from backend: {err}")
+
 def _call_backend(url, payload, log_msg):
     """calls the backend with provided args
 
