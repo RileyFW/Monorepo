@@ -28,14 +28,23 @@ def create_job_object(experiment_data, image_override=None):
     runner_body = get_yaml_file_body(RUNNER_PATH)
 
     runner_body['metadata']['name'] = job_name
-    runner_body['spec']['template']['spec']['containers'][0]['command'] = job_command
+    pod_spec = runner_body['spec']['template']['spec']
+    pod_spec['containers'][0]['command'] = job_command
+
+    # Config-gated gVisor sandboxing: only set runtimeClassName when the backend
+    # is told to (RUNNER_RUNTIME_CLASS, e.g. "gvisor"). This keeps the runner
+    # runnable on clusters where the sandbox runtime isn't installed -- pods that
+    # request a missing RuntimeClass are rejected -- so gVisor is strictly opt-in.
+    runtime_class = os.getenv("RUNNER_RUNTIME_CLASS")
+    if runtime_class:
+        pod_spec['runtimeClassName'] = runtime_class
 
     if image_override:
-        runner_body['spec']['template']['spec']['containers'][0]['image'] = image_override
+        pod_spec['containers'][0]['image'] = image_override
     elif os.getenv("IMAGE_RUNNER"):
         # Get the image name
         image_name = str(os.getenv("IMAGE_RUNNER"))
-        runner_body['spec']['template']['spec']['containers'][0]['image'] = image_name
+        pod_spec['containers'][0]['image'] = image_name
 
     return runner_body
 
