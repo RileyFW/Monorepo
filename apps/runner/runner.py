@@ -1,5 +1,7 @@
 """Module that provides functionality of the runner"""
 import os
+import csv
+import base64
 import shutil
 import logging
 import sys
@@ -15,11 +17,11 @@ from modules.data.experiment import ExperimentData, ExperimentType
 from modules.data.parameters import Parameter, parseRawHyperparameterData
 #from modules.db.mongo import upload_experiment_aggregated_results, upload_experiment_log, upload_experiment_zip, verify_mongo_connection
 from modules.logging.gladosLogging import EXPERIMENT_LOGGER, SYSTEM_LOGGER, close_experiment_logger, configure_root_logger, open_experiment_logger
-from modules.runner import conduct_experiment
-from modules.exceptions import CustomFlaskError, DatabaseConnectionError, GladosInternalError, ExperimentAbort, GladosUserError
+from modules.runner import conduct_experiment, merge_partial_result_contents
+from modules.exceptions import CustomFlaskError, DatabaseConnectionError, GladosInternalError, GladosUserError
 from modules.output.plots import generateScatterPlot
 from modules.configs import generate_config_files
-from modules.utils import _get_env, upload_experiment_aggregated_results, upload_experiment_log, upload_experiment_zip, verify_mongo_connection, get_experiment_with_id, update_exp_value, request_completion_email
+from modules.utils import _get_env, upload_experiment_aggregated_results, upload_experiment_log, upload_experiment_zip, verify_mongo_connection, get_experiment_with_id, update_exp_value, request_completion_email, report_shard_complete, upload_partial_results, upload_partial_artifacts, get_partial_results, get_partial_artifacts
 
 try:
     import magic  # Crashes on windows if you're missing the 'python-magic-bin' python package
@@ -71,19 +73,27 @@ def run_batch(data: IncomingStartRequest):
     # Obtain most basic experiment info
     exp_id = data['experiment']['id']
     syslogger.debug('received %s', exp_id)
-    update_exp_value(exp_id, "status", "RUNNING")
+
+    # This pod is one shard of an Indexed Job; k8s injects its 0-based index.
+    # numShards is read from the experiment doc's `workers` field once loaded.
+    shardIndex = int(os.getenv("JOB_COMPLETION_INDEX", "0"))
+    syslogger.info('Running as shard %s', shardIndex)
+
+    # Only shard 0 flips the experiment to RUNNING to avoid redundant/racing writes.
+    if shardIndex == 0:
+        update_exp_value(exp_id, "status", "RUNNING")
 
     open_experiment_logger(exp_id)
 
     # Retrieve experiment details from the backend api
     try:
         experiment_data = get_experiment_with_id(exp_id)
-        
-        
+
+
     except Exception as err:  # pylint: disable=broad-exception-caught
         explogger.error("Error retrieving experiment data from mongo, aborting")
         explogger.exception(err)
-        close_experiment_run(exp_id)
+        close_shard_run(exp_id, shardIndex)
         return
 
     # Parse hyperaparameters into their datatype. Required to parse the rest of the experiment data
@@ -95,7 +105,7 @@ def run_batch(data: IncomingStartRequest):
         else:
             explogger.error("Error generating hyperparameters - Validation error")
         explogger.exception(err)
-        close_experiment_run(exp_id)
+        close_shard_run(exp_id, shardIndex)
         return
     experiment_data['hyperparameters'] = hyperparameters
 
@@ -106,7 +116,7 @@ def run_batch(data: IncomingStartRequest):
     except ValueError as err:
         explogger.error("Experiment data was not formatted correctly, aborting")
         explogger.exception(err)
-        close_experiment_run(exp_id)
+        close_shard_run(exp_id, shardIndex)
         return
 
     #Downloading Experiment File
@@ -121,7 +131,7 @@ def run_batch(data: IncomingStartRequest):
         explogger.error("This is not a supported experiment file type, aborting")
         explogger.exception(err)
         os.chdir('../..')
-        close_experiment_run(exp_id)
+        close_shard_run(exp_id, shardIndex)
         return
     
     # If it is a zip file, extract it
@@ -134,7 +144,7 @@ def run_batch(data: IncomingStartRequest):
             explogger.error("Failed to extract zip file")
             explogger.exception(err)
             os.chdir('../..')
-            close_experiment_run(exp_id)
+            close_shard_run(exp_id, shardIndex)
             return
     
     # Dependencies are baked into the per-experiment image at build time (see
@@ -152,7 +162,7 @@ def run_batch(data: IncomingStartRequest):
             explogger.error("This is not a supported experiment file type, aborting")
             explogger.exception(err)
             os.chdir('../..')
-            close_experiment_run(exp_id)
+            close_shard_run(exp_id, shardIndex)
             return
       
 
@@ -162,40 +172,88 @@ def run_batch(data: IncomingStartRequest):
     if totalExperimentRuns == 0:
         os.chdir('../..')
         explogger.exception(GladosInternalError("Error generating configs - somehow no config files were produced?"))
-        close_experiment_run(exp_id)
+        close_shard_run(exp_id, shardIndex)
         return
 
     experiment.totalExperimentRuns = totalExperimentRuns
 
-    update_exp_value(exp_id, "totalExperimentRuns", experiment.totalExperimentRuns)
+    # generate_config_files is deterministic, so every shard computes the same
+    # total; only shard 0 needs to persist it.
+    numShards = experiment.workers or 1
+    if shardIndex == 0:
+        update_exp_value(exp_id, "totalExperimentRuns", experiment.totalExperimentRuns)
 
     try:
-        conduct_experiment(experiment)
-        post_process_experiment(experiment)
-        upload_experiment_results(experiment)
-        send_email(experiment, "COMPLETED")
-    except ExperimentAbort as err:
-        explogger.error(f'Experiment {exp_id} critical failure, not doing any result uploading or post processing')
-        explogger.exception(err)
-        send_email(experiment, "ABORTED")
+        # Run only this shard's slice of trials and upload the partial artifacts.
+        # Aggregation, plotting, the zip, the email, and the terminal status are
+        # all owned by the finalize job (spawned by the backend once every shard
+        # reports complete) -- a shard must not do them or the outputs would be
+        # per-pod partials overwriting each other.
+        conduct_experiment(experiment, shardIndex, numShards)
+        upload_shard_results(experiment, shardIndex)
+        upload_shard_artifacts(experiment, shardIndex)
     except Exception as err:  # pylint: disable=broad-exception-caught
-        explogger.error('Uncaught exception while running an experiment. The GLADOS code needs to be changed to handle this in a cleaner manner')
+        explogger.error('Uncaught exception while running an experiment shard. The GLADOS code needs to be changed to handle this in a cleaner manner')
         explogger.exception(err)
-        send_email(experiment, "FAILED")
     finally:
         # We need to be out of the dir for the log file upload to work
         os.chdir('../..')
-        close_experiment_run(exp_id)
+        close_shard_run(exp_id, shardIndex)
 
-def close_experiment_run(expId: DocumentId):
-    explogger.info(f'Exiting experiment {expId}')
-    update_exp_value(expId, 'finished', True)
-    update_exp_value(expId, 'status', "COMPLETED")
-    endSeconds = time.time()
-    update_exp_value(expId, 'finishedAtEpochMilliseconds', int(endSeconds * 1000))
-    close_experiment_logger()
-    upload_experiment_log(expId)
-    remove_downloaded_directory(expId)
+def close_shard_run(expId: DocumentId, shardIndex: int):
+    """Wind down one runner-pod shard.
+
+    Uploads this shard's log and cleans up, then -- always, even after a failure
+    -- reports the shard complete so the backend's finishedShards counter
+    advances and the finalize job eventually runs. Unlike the old
+    close_experiment_run, this does NOT write finished/status/finishedAt: those
+    terminal fields are owned by the finalize job so they are set exactly once,
+    after every shard's results are merged.
+    """
+    explogger.info(f'Exiting experiment {expId} shard {shardIndex}')
+    try:
+        close_experiment_logger()
+        upload_experiment_log(expId)
+    except Exception as err:  # pylint: disable=broad-exception-caught
+        syslogger.error("Failed to upload log for shard %s: %s", shardIndex, err)
+    try:
+        remove_downloaded_directory(expId)
+    except Exception as err:  # pylint: disable=broad-exception-caught
+        syslogger.error("Failed to clean up dir for shard %s: %s", shardIndex, err)
+    # Report last, and defensively, so a failed shard still advances finishedShards.
+    try:
+        report_shard_complete(expId)
+    except Exception as err:  # pylint: disable=broad-exception-caught
+        syslogger.error("Failed to report shard %s complete: %s", shardIndex, err)
+
+def upload_shard_results(experiment: ExperimentData, shardIndex: int):
+    """Upload this shard's partial results.csv for the finalize job to merge."""
+    verify_mongo_connection()
+    try:
+        with open('results.csv', 'r', encoding="utf8") as experimentFile:
+            resultContent = experimentFile.read()
+    except Exception as err:
+        raise GladosInternalError("Failed to read partial result file for upload to mongodb") from err
+    upload_partial_results(experiment.expId, shardIndex, resultContent)
+
+def upload_shard_artifacts(experiment: ExperimentData, shardIndex: int):
+    """Bundle this shard's ResCsvs (per-trial logs/extra files) + its config files.
+
+    The finalize job unpacks every shard's bundle into one ResCsvs to build the
+    complete results zip.
+    """
+    try:
+        if os.path.exists('configFiles'):
+            shutil.copytree('configFiles', 'ResCsvs/configFiles', dirs_exist_ok=True)
+    except Exception as err:
+        raise GladosInternalError("Error copying config files to ResCsvs") from err
+    try:
+        shutil.make_archive(f'PartialCsvs{shardIndex}', 'zip', 'ResCsvs')
+        with open(f"PartialCsvs{shardIndex}.zip", "rb") as file:
+            encoded = Binary(file.read())
+    except Exception as err:
+        raise GladosInternalError("Error preparing partial results zip") from err
+    upload_partial_artifacts(experiment.expId, shardIndex, encoded)
 
 def determine_experiment_file_type(filepath: str):
     try:
@@ -260,41 +318,6 @@ def remove_downloaded_directory(experimentId: DocumentId):
         explogger.error('Error during plot generation')
         explogger.exception(err)
 
-def upload_experiment_results(experiment: ExperimentData):
-    explogger.info('Uploading Experiment Results...')
-
-    explogger.info('Uploading to MongoDB')
-    verify_mongo_connection()
-
-    resultContent = None
-    try:
-        with open('results.csv', 'r', encoding="utf8") as experimentFile:
-            resultContent = experimentFile.read()
-    except Exception as err:
-        raise GladosInternalError("Failed to read aggregated result file data for upload to mongodb") from err
-
-    upload_experiment_aggregated_results(experiment, resultContent)
-
-    explogger.info('Uploading Result Csvs')
-    
-    # Copy the configFiles to the ResCsvs folder
-    try:
-        # Check if configFiles dir exists
-        if os.path.exists('configFiles'):
-            shutil.copytree('configFiles', 'ResCsvs/configFiles')
-    except Exception as err:
-        raise GladosInternalError("Error copying config files to ResCsvs") from err
-
-    encoded = None
-    try:
-        shutil.make_archive('ResultCsvs', 'zip', 'ResCsvs')
-        with open("ResultCsvs.zip", "rb") as file:
-            encoded = Binary(file.read())
-    except Exception as err:
-        raise GladosInternalError("Error preparing experiment results zip") from err
-
-    upload_experiment_zip(experiment, encoded)
-
 def post_process_experiment(experiment: ExperimentData):
     if experiment.postProcess:
         explogger.info("Beginning post processing")
@@ -321,12 +344,136 @@ def send_email(experiment: ExperimentData, status: str):
             experiment.passes,
             experiment.fails,
         )
-    
-        
+
+
+# --- Finalize mode ---------------------------------------------------------
+# Spawned by the backend as a one-shot Job (runner-<expId>-finalize) once every
+# shard has reported complete. It merges each shard's partial results/artifacts
+# into the single aggregated results.csv/zip/plot, sends the one completion
+# email, and writes the terminal finished/status fields.
+
+def finalize_main(experiment_data: str):
+    """Entry point for the finalize Job (`runner.py --finalize <json>`)."""
+    if _check_request_integrity(experiment_data):
+        finalize_and_catch_exceptions(json.loads(experiment_data))
+        return
+    syslogger.error("Received malformed finalize request: %s", experiment_data)
+
+def finalize_and_catch_exceptions(data: IncomingStartRequest):
+    try:
+        finalize_experiment(data)
+    except Exception as err:
+        syslogger.error("Unexpected exception during finalize; the experiment may not be marked finished.")
+        syslogger.exception(err)
+        close_experiment_logger()
+        raise err
+
+def finalize_experiment(data: IncomingStartRequest):
+    exp_id = data['experiment']['id']
+    syslogger.info('Finalizing experiment %s', exp_id)
+    open_experiment_logger(exp_id)
+
+    # Load the (now complete) experiment doc so passes/fails/email fields are final.
+    try:
+        experiment_data = get_experiment_with_id(exp_id)
+        experiment_data['hyperparameters'] = parseRawHyperparameterData(experiment_data['hyperparameters'])
+        experiment = ExperimentData(**experiment_data)
+        experiment.postProcess = experiment.scatter
+    except Exception as err:  # pylint: disable=broad-exception-caught
+        explogger.error("Finalize: failed to load experiment data, marking failed")
+        explogger.exception(err)
+        _finish_experiment(exp_id, "FAILED", None)
+        return
+
+    os.makedirs(f'ExperimentFiles/{exp_id}', exist_ok=True)
+    os.chdir(f'ExperimentFiles/{exp_id}')
+    try:
+        mergedRows, header = _merge_partial_results(exp_id)
+        if header is None:
+            explogger.error("Finalize: no shard produced results; marking experiment failed")
+            os.chdir('../..')
+            _finish_experiment(exp_id, "FAILED", experiment)
+            return
+
+        with open('results.csv', 'w', encoding="utf8") as expResults:
+            writer = csv.writer(expResults)
+            writer.writerow(header)
+            writer.writerows(mergedRows)
+
+        # Rebuild the full ResCsvs from every shard's partial bundle, then plot,
+        # aggregate, and zip -- the same artifacts a single-pod run produced.
+        os.makedirs('ResCsvs', exist_ok=True)
+        _merge_partial_artifacts(exp_id)
+
+        post_process_experiment(experiment)
+
+        verify_mongo_connection()
+        with open('results.csv', 'r', encoding="utf8") as experimentFile:
+            upload_experiment_aggregated_results(experiment, experimentFile.read())
+
+        try:
+            shutil.copy2('results.csv', 'ResCsvs/results.csv')
+            shutil.make_archive('ResultCsvs', 'zip', 'ResCsvs')
+            with open("ResultCsvs.zip", "rb") as file:
+                encoded = Binary(file.read())
+        except Exception as err:
+            raise GladosInternalError("Error preparing merged experiment results zip") from err
+        upload_experiment_zip(experiment, encoded)
+
+        os.chdir('../..')
+        _finish_experiment(exp_id, "COMPLETED", experiment)
+    except Exception as err:  # pylint: disable=broad-exception-caught
+        explogger.error("Finalize: error while aggregating shard results")
+        explogger.exception(err)
+        try:
+            os.chdir('../..')
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+        _finish_experiment(exp_id, "FAILED", experiment)
+
+def _merge_partial_results(exp_id: DocumentId):
+    """Pull every shard's partial results CSV from the backend and merge them.
+
+    Delegates the CSV merge to modules.runner.merge_partial_result_contents.
+    """
+    partials = get_partial_results(exp_id)
+    return merge_partial_result_contents(partials)
+
+def _merge_partial_artifacts(exp_id: DocumentId):
+    """Unpack every shard's partial ResCsvs zip into the combined ResCsvs dir."""
+    partials = get_partial_artifacts(exp_id)
+    for partial in partials:
+        try:
+            raw = base64.b64decode(partial['encoded'])
+            tmpZip = f"partial_{partial['shardIndex']}.zip"
+            with open(tmpZip, 'wb') as zipFile:
+                zipFile.write(raw)
+            shutil.unpack_archive(tmpZip, 'ResCsvs')
+            os.remove(tmpZip)
+        except Exception as err:  # pylint: disable=broad-exception-caught
+            explogger.error("Finalize: failed to unpack partial artifacts for shard %s", partial.get('shardIndex'))
+            explogger.exception(err)
+
+def _finish_experiment(exp_id: DocumentId, status: str, experiment: typing.Optional[ExperimentData]):
+    """Write the terminal experiment fields exactly once and send the one email."""
+    update_exp_value(exp_id, 'status', status)
+    update_exp_value(exp_id, 'finished', True)
+    update_exp_value(exp_id, 'finishedAtEpochMilliseconds', int(time.time() * 1000))
+    if experiment is not None:
+        send_email(experiment, status)
+    try:
+        close_experiment_logger()
+        upload_experiment_log(exp_id)
+    except Exception as err:  # pylint: disable=broad-exception-caught
+        syslogger.error("Finalize: failed to upload finalize log: %s", err)
+    remove_downloaded_directory(exp_id)
+
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        raise ValueError("Error: Too few arguments. Needs ID (ex: python runner.py 1234)")
-    elif len(sys.argv) > 2:
-        raise ValueError("Error: Too many arguments. Needs ID (ex: python runner.py 1234)")
-    main(sys.argv[1])
+    args = sys.argv[1:]
+    if len(args) == 2 and args[0] == '--finalize':
+        finalize_main(args[1])
+    elif len(args) == 1:
+        main(args[0])
+    else:
+        raise ValueError("Error: expected `<json>` (runner) or `--finalize <json>` (finalize job)")

@@ -1,4 +1,5 @@
 import json
+import base64
 import pymongo
 from pymongo.errors import ConnectionFailure
 from bson.objectid import ObjectId
@@ -103,3 +104,86 @@ def update_exp_value(expId: str, field: str, newValue: str, mongoClient: pymongo
     experimentsCollection = mongoClient["gladosdb"].experiments
     experimentsCollection.update_one({"_id": ObjectId(expId)}, {"$set": {field: newValue}})
     return
+
+def increment_exp_value(expId: str, field: str, amount, mongoClient: pymongo.MongoClient):
+    """Atomically increment a numeric experiment field ($inc).
+
+    Used for the progress counters (passes/fails) which are now written
+    concurrently by multiple runner-pod shards. A $set of an absolute per-pod
+    count would clobber the other shards' progress, so shards send a delta here
+    and Mongo sums them atomically.
+    """
+    experimentsCollection = mongoClient["gladosdb"].experiments
+    experimentsCollection.update_one({"_id": ObjectId(expId)}, {"$inc": {field: amount}})
+    return
+
+def increment_finished_shards(expId: str, mongoClient: pymongo.MongoClient):
+    """Atomically record that one runner-pod shard has finished.
+
+    Returns (finishedShards, workers) read from the post-increment document so the
+    caller can detect the last shard (finishedShards == workers) exactly once and
+    trigger the finalize job. find_one_and_update is atomic, so two shards
+    finishing simultaneously each get a distinct finishedShards value.
+    """
+    experimentsCollection = mongoClient["gladosdb"].experiments
+    updated = experimentsCollection.find_one_and_update(
+        {"_id": ObjectId(expId)},
+        {"$inc": {"finishedShards": 1}},
+        return_document=pymongo.ReturnDocument.AFTER,
+    )
+    if updated is None:
+        raise Exception("Could not find experiment to record shard completion!")
+    return updated.get("finishedShards", 0), updated.get("workers", 1)
+
+def upload_partial_results(experimentId: str, shardIndex: int, results: str, mongoClient: pymongo.MongoClient):
+    """Store one shard's partial results CSV (its rows + a header) in GridFS.
+
+    Keyed by experimentId + shardIndex so the finalize job can pull every shard's
+    partial and merge them into the single aggregated results.csv.
+    """
+    partialBucket = GridFSBucket(mongoClient["gladosdb"], bucket_name='partialResultsBucket')
+    try:
+        resultId = partialBucket.upload_from_stream(
+            f"partial{experimentId}-{shardIndex}",
+            results.encode('utf-8'),
+            metadata={"experimentId": experimentId, "shardIndex": shardIndex},
+        )
+        return str(resultId)
+    except Exception as err:
+        raise Exception("Encountered error while storing partial results in MongoDB") from err
+
+def upload_partial_artifacts(experimentId: str, shardIndex: int, encoded: Binary, mongoClient: pymongo.MongoClient):
+    """Store one shard's partial ResCsvs zip (its per-trial logs/extra files)."""
+    partialBucket = GridFSBucket(mongoClient["gladosdb"], bucket_name='partialArtifactsBucket')
+    try:
+        resultId = partialBucket.upload_from_stream(
+            f"partial{experimentId}-{shardIndex}.zip",
+            encoded,
+            metadata={"experimentId": experimentId, "shardIndex": shardIndex},
+        )
+        return str(resultId)
+    except Exception as err:
+        raise Exception("Encountered error while storing partial artifacts in MongoDB") from err
+
+def get_partial_results(experimentId: str, mongoClient: pymongo.MongoClient):
+    """Return every shard's partial results CSV for an experiment.
+
+    Returns a list of {"shardIndex": int, "results": str} for the finalize job to
+    merge. Ordering is not guaranteed; the finalize step sorts merged rows itself.
+    """
+    partialBucket = GridFSBucket(mongoClient["gladosdb"], bucket_name='partialResultsBucket')
+    partials = []
+    for grid_file in partialBucket.find({"metadata.experimentId": experimentId}):
+        shardIndex = (grid_file.metadata or {}).get("shardIndex", 0)
+        partials.append({"shardIndex": shardIndex, "results": grid_file.read().decode('utf-8')})
+    return partials
+
+def get_partial_artifacts(experimentId: str, mongoClient: pymongo.MongoClient):
+    """Return every shard's partial ResCsvs zip, base64-encoded, for the finalize job."""
+    partialBucket = GridFSBucket(mongoClient["gladosdb"], bucket_name='partialArtifactsBucket')
+    partials = []
+    for grid_file in partialBucket.find({"metadata.experimentId": experimentId}):
+        shardIndex = (grid_file.metadata or {}).get("shardIndex", 0)
+        encoded = base64.b64encode(grid_file.read()).decode('utf-8')
+        partials.append({"shardIndex": shardIndex, "encoded": encoded})
+    return partials

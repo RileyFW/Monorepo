@@ -463,17 +463,20 @@ const NewExperiment = ({ formState, setFormState, copyID, setCopyId, isDefault, 
 										<div className='sticky bottom-0 flex-shrink-0 border-t border-gray-200 px-4 py-5 sm:px-6'>
 											<div className='flex justify-end space-x-3'>
 												<div className='flex space-x-3 flex-1'>
-													<label className='block text-sm font-medium text-gray-900 sm:mt-px sm:pt-2'>
-													Number of Workers
+													<label className='block text-sm font-medium text-gray-900 sm:mt-px sm:pt-2'
+														title='Number of runner pods to split this experiment&apos;s trials across. Each pod runs a disjoint subset of the hyperparameter permutations in parallel, so more pods finish a large sweep faster.'>
+													Runner Pods
 													</label>
 													<input
 														type='number'
-														placeholder={'Number of Workers'}
+														min={1}
+														max={50}
+														placeholder={'Runner pods (parallelism)'}
 														className='rounded-md  border-gray-300 shadow-sm focus:border-blue-500 sm:text-sm'
 														required
 														{...form.getInputProps('workers')}
 													/>
-													
+
 												</div>
 												<button
 													type='button'

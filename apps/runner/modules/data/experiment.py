@@ -54,6 +54,11 @@ class ExperimentData(BaseModel):
     fails: int = 0
     status = "RUNNING"
 
+    # Number of runner-pod shards this experiment is spread across. The trials are
+    # partitioned by (trialNum % workers == JOB_COMPLETION_INDEX). Defaults to 1
+    # (single pod, unchanged behavior) when the experiment doc omits it.
+    workers: int = 1
+
     @validator('trialResult')
     @classmethod
     def check_trialResult(cls, v):

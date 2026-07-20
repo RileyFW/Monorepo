@@ -8,10 +8,10 @@ from bson.binary import Binary
 from flask import Flask, Response, request, jsonify, send_file
 from kubernetes import client, config
 import pymongo
-from modules.mongo import upload_experiment_aggregated_results, upload_experiment_zip, upload_log_file, verify_mongo_connection, check_insert_default_experiments, download_experiment_file, get_experiment, update_exp_value
+from modules.mongo import upload_experiment_aggregated_results, upload_experiment_zip, upload_log_file, verify_mongo_connection, check_insert_default_experiments, download_experiment_file, get_experiment, update_exp_value, increment_exp_value, increment_finished_shards, upload_partial_results, upload_partial_artifacts, get_partial_results, get_partial_artifacts
 from modules.mailSend import send_completion_email
 
-from spawn_runner import create_job, create_job_object
+from spawn_runner import create_job, create_job_object, create_finalize_job_object
 from build_image import build_experiment_image
 flaskApp = Flask(__name__)
 
@@ -96,6 +96,9 @@ def spawn_job(experiment_data):
         stored = get_experiment(experiment_data['experiment']['id'], mongoClient)
         experiment_data['experiment']['pipRequirements'] = stored.get('pipRequirements')
         experiment_data['experiment']['aptPackages'] = stored.get('aptPackages')
+        # Number of runner-pod shards to spread this experiment's trials across.
+        # Drives the Indexed Job's parallelism/completions in create_job_object.
+        experiment_data['experiment']['workers'] = stored.get('workers')
     except Exception:
         # Non-fatal: fall back to the default runner image (no per-experiment build),
         # but log it so a Mongo/lookup problem is visible rather than silent.
@@ -114,9 +117,46 @@ def cancel_experiment():
     """The query to cancel an experiment"""
     data = request.get_json()
     job_name = data['jobName']
-    # kill the job
+    # kill the runner Job (a single Indexed Job owns every shard pod, so deleting
+    # it by name removes all shards at once)
     BATCH_API.delete_namespaced_job(job_name, "default", propagation_policy="Background")
+    # Also remove the finalize Job if it was already spawned. It is a separate
+    # Job (runner-<expId>-finalize), so cancelling the runner does not touch it.
+    # Best-effort: a not-yet-spawned finalize job 404s, which is fine.
+    try:
+        BATCH_API.delete_namespaced_job(job_name + "-finalize", "default", propagation_policy="Background")
+    except Exception:
+        pass
     return Response(status=200)
+
+def spawn_finalize_job(experiment_id):
+    """Spawn the one-shot finalize Job once every shard has reported complete.
+
+    The runner shards each upload a partial results CSV + partial artifacts zip
+    and only $inc the progress counters; none of them owns the terminal
+    aggregation. This finalize Job (runner image, --finalize mode) merges the
+    partials into the single results.csv/zip/plot, sends the one completion
+    email, and writes the terminal finished/status fields.
+    """
+    job = create_finalize_job_object(experiment_id)
+    create_job(BATCH_API, job)
+
+@flaskApp.post("/shardComplete")
+def shard_complete():
+    """A runner-pod shard reports it has finished; trigger finalize on the last one.
+
+    Atomically increments finishedShards and, when it reaches the experiment's
+    worker count, spawns the finalize Job exactly once (find_one_and_update hands
+    out distinct counts, so only one shard sees finishedShards == workers).
+    """
+    try:
+        experiment_id = request.get_json()['experimentId']
+        finished_shards, workers = increment_finished_shards(experiment_id, mongoClient)
+        if finished_shards >= workers:
+            executor.submit(spawn_finalize_job, experiment_id).add_done_callback(_log_spawn_result)
+        return Response(status=200)
+    except Exception:
+        return Response(status=500)
     
 @flaskApp.post("/sendEmail")
 def send_email():
@@ -153,6 +193,42 @@ def upload_zip():
     experimentId = json['experimentId']
     encoded = Binary(base64.b64decode(json['encoded']))
     return {'id': upload_experiment_zip(experimentId, encoded, mongoClient)}
+
+@flaskApp.post("/uploadPartialResults")
+def upload_partial_results_route():
+    """Store one shard's partial results CSV (its header + its rows)."""
+    json = request.get_json()
+    experimentId = json['experimentId']
+    shardIndex = json['shardIndex']
+    results = json['results']
+    return {'id': upload_partial_results(experimentId, shardIndex, results, mongoClient)}
+
+@flaskApp.post("/uploadPartialArtifacts")
+def upload_partial_artifacts_route():
+    """Store one shard's partial ResCsvs zip (its per-trial logs/extra files)."""
+    json = request.get_json()
+    experimentId = json['experimentId']
+    shardIndex = json['shardIndex']
+    encoded = Binary(base64.b64decode(json['encoded']))
+    return {'id': upload_partial_artifacts(experimentId, shardIndex, encoded, mongoClient)}
+
+@flaskApp.post("/getPartialResults")
+def get_partial_results_route():
+    """Return every shard's partial results CSV for the finalize job to merge."""
+    try:
+        experimentId = request.get_json()['experimentId']
+        return {'partials': get_partial_results(experimentId, mongoClient)}
+    except Exception:
+        return Response(status=500)
+
+@flaskApp.post("/getPartialArtifacts")
+def get_partial_artifacts_route():
+    """Return every shard's partial ResCsvs zip (base64) for the finalize job."""
+    try:
+        experimentId = request.get_json()['experimentId']
+        return {'partials': get_partial_artifacts(experimentId, mongoClient)}
+    except Exception:
+        return Response(status=500)
 
 @flaskApp.post("/uploadLog")
 def upload_log():
@@ -196,6 +272,24 @@ def update_experiment():
         field = json['field']
         newVal = json['newValue']
         update_exp_value(experiment_id, field, newVal, mongoClient)
+        return Response(status=200)
+    except Exception:
+        return Response(status=500)
+
+@flaskApp.post("/incrementExperimentValue")
+def increment_experiment():
+    """Atomically $inc a numeric experiment field (e.g. passes/fails).
+
+    Runner shards run concurrently, so progress counters must be summed
+    atomically rather than $set to a per-pod absolute (which would clobber the
+    other shards' progress).
+    """
+    try:
+        json = request.get_json()
+        experiment_id = json['experimentId']
+        field = json['field']
+        amount = json.get('amount', 1)
+        increment_exp_value(experiment_id, field, amount, mongoClient)
         return Response(status=200)
     except Exception:
         return Response(status=500)
