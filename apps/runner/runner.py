@@ -19,8 +19,7 @@ from modules.runner import conduct_experiment
 from modules.exceptions import CustomFlaskError, DatabaseConnectionError, GladosInternalError, ExperimentAbort, GladosUserError
 from modules.output.plots import generateScatterPlot
 from modules.configs import generate_config_files
-from modules.utils import _get_env, upload_experiment_aggregated_results, upload_experiment_log, upload_experiment_zip, verify_mongo_connection, get_experiment_with_id, update_exp_value
-import modules.mailSend
+from modules.utils import _get_env, upload_experiment_aggregated_results, upload_experiment_log, upload_experiment_zip, verify_mongo_connection, get_experiment_with_id, update_exp_value, request_completion_email
 
 try:
     import magic  # Crashes on windows if you're missing the 'python-magic-bin' python package
@@ -311,9 +310,17 @@ def post_process_experiment(experiment: ExperimentData):
             
 def send_email(experiment: ExperimentData, status: str):
     if experiment.sendEmail:
-        explogger.info(f"Sending email to {experiment.creatorEmail}")
+        explogger.info(f"Requesting completion email to {experiment.creatorEmail}")
         experiment.status = status
-        modules.mailSend.send_email(experiment)
+        # The backend holds the Gmail credentials and does the actual send; the
+        # runner just forwards the display fields (see request_completion_email).
+        request_completion_email(
+            experiment.creatorEmail,
+            experiment.name,
+            experiment.status,
+            experiment.passes,
+            experiment.fails,
+        )
     
         
 

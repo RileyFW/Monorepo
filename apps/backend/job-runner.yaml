@@ -8,6 +8,10 @@ spec:
     metadata:
       labels:
         app: GLADOS
+        # Distinct label the runner NetworkPolicy selects on. `app: GLADOS` is
+        # shared with other GLADOS components (e.g. the backend), so it cannot be
+        # the selector for the runner-only egress lockdown.
+        role: runner
     spec:
       containers:
       - name: runner
@@ -65,11 +69,9 @@ spec:
             secretKeyRef:
               name: secret-env
               key: BACKEND_PORT
-        - name: GMAIL_CREDS
-          valueFrom:
-            secretKeyRef:
-              name: secret-env
-              key: GMAIL_CREDS
+        # NOTE: GMAIL_CREDS is intentionally NOT provided to the runner. Sending
+        # the completion email moved to the backend (POST /sendEmail); the
+        # untrusted runner pod no longer holds Google credentials.
       # Run as a non-root user; fsGroup makes the emptyDir volumes group-writable
       # so the process can write to /work and /tmp under readOnlyRootFilesystem.
       securityContext:

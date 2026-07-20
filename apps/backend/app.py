@@ -9,6 +9,7 @@ from flask import Flask, Response, request, jsonify, send_file
 from kubernetes import client, config
 import pymongo
 from modules.mongo import upload_experiment_aggregated_results, upload_experiment_zip, upload_log_file, verify_mongo_connection, check_insert_default_experiments, download_experiment_file, get_experiment, update_exp_value
+from modules.mailSend import send_completion_email
 
 from spawn_runner import create_job, create_job_object
 from build_image import build_experiment_image
@@ -56,7 +57,10 @@ def hello_world():
 @flaskApp.get("/queue")
 def get_queue():
     """The query to get the size of the queue"""
-    # There must be a cleaner way to access this queue size...
+    # ThreadPoolExecutor exposes no public API for the pending-work count, so we
+    # read the internal dict directly. pylint can't see this dynamically-created
+    # member and flags protected-access; both are expected here.
+    # pylint: disable=protected-access,no-member
     return jsonify({"queueSize": len(executor._pending_work_items)})
 
 @flaskApp.post("/experiment")
@@ -114,6 +118,25 @@ def cancel_experiment():
     BATCH_API.delete_namespaced_job(job_name, "default", propagation_policy="Background")
     return Response(status=200)
     
+@flaskApp.post("/sendEmail")
+def send_email():
+    """Send an experiment-completion email on the runner's behalf.
+
+    The runner used to send this itself, which required shipping the Gmail
+    credentials and internet egress into the untrusted runner pod. It now POSTs
+    the display fields here and the backend performs the send. Best-effort:
+    always returns 200 so a mail failure never fails the experiment run.
+    """
+    data = request.get_json()
+    send_completion_email(
+        data.get('email'),
+        data.get('name'),
+        data.get('status'),
+        data.get('passes'),
+        data.get('fails'),
+    )
+    return Response(status=200)
+
 @flaskApp.post("/uploadResults")
 def upload_results():
     json = request.get_json()

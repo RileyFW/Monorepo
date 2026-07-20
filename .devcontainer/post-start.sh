@@ -11,7 +11,11 @@ while ! docker info &> /dev/null; do
     sleep 1
 done
 # create the cluster
-ctlptl create cluster minikube --registry=ctlptl-registry
+# --minikube-start-flags=--cni=calico installs the Calico CNI, which is required
+# for Kubernetes NetworkPolicy enforcement (the runner egress lockdown in
+# kubernetes_init/tilt/network-policy-runner.yaml). minikube's default CNI does
+# not enforce NetworkPolicy, so without this the policy is accepted but ignored.
+ctlptl create cluster minikube --registry=ctlptl-registry --minikube-start-flags=--cni=calico
 
 # Install some pip packages
 pip install flask-cors
