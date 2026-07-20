@@ -11,9 +11,13 @@ const navigation = [
     { name: 'Dashboard', href: '/dashboard', current: true }
 ];
 
-export default async function LiveLogPage({ searchParams }){
+export default async function LiveLogPage({ searchParams }: { searchParams: Promise<{ id?: string }> }){
     const session = await auth();
-    const id = typeof searchParams.id === 'string' ? searchParams.id : undefined;
+    // In Next 16 `searchParams` is a Promise and must be awaited before its
+    // properties can be read; accessing `.id` synchronously always yields
+    // undefined and bounces the user back to the dashboard.
+    const resolvedSearchParams = await searchParams;
+    const id = typeof resolvedSearchParams.id === 'string' ? resolvedSearchParams.id : undefined;
     if (!id) {
         redirect('/dashboard?toastMessage=' + encodeURIComponent("No experiment ID provided!") + "&toastType=error");
     }
