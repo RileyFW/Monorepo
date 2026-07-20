@@ -21,7 +21,9 @@ def create_job_object(experiment_data, image_override=None):
     # Configure Pod template container
     job_name = "runner-" + experiment_data['experiment']['id']
 
-    job_command = ["python3", "runner.py", json.dumps(experiment_data)]
+    # Absolute path: the runner Job sets workingDir to a writable volume (/work),
+    # so the script must be referenced by its baked-in location under /app.
+    job_command = ["python3", "/app/runner.py", json.dumps(experiment_data)]
 
     runner_body = get_yaml_file_body(RUNNER_PATH)
 
