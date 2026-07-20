@@ -31,6 +31,20 @@ def create_job_object(experiment_data, image_override=None):
     pod_spec = runner_body['spec']['template']['spec']
     pod_spec['containers'][0]['command'] = job_command
 
+    # Spread the experiment's trials across `workers` runner pods. A single
+    # Indexed Job owns every shard: k8s injects JOB_COMPLETION_INDEX into each
+    # pod (0..workers-1), which the runner reads to pick its trial subset. Using
+    # one Indexed Job (rather than N separate Jobs) keeps the job name
+    # runner-<expId>, so cancel and pod/log lookup are unchanged.
+    workers = experiment_data['experiment'].get('workers') or 1
+    try:
+        workers = max(1, int(workers))
+    except (TypeError, ValueError):
+        workers = 1
+    runner_body['spec']['completionMode'] = 'Indexed'
+    runner_body['spec']['completions'] = workers
+    runner_body['spec']['parallelism'] = workers
+
     # Config-gated gVisor sandboxing: only set runtimeClassName when the backend
     # is told to (RUNNER_RUNTIME_CLASS, e.g. "gvisor"). This keeps the runner
     # runnable on clusters where the sandbox runtime isn't installed -- pods that
@@ -45,6 +59,35 @@ def create_job_object(experiment_data, image_override=None):
         # Get the image name
         image_name = str(os.getenv("IMAGE_RUNNER"))
         pod_spec['containers'][0]['image'] = image_name
+
+    return runner_body
+
+def create_finalize_job_object(experiment_id):
+    """Create the one-shot finalize Job for a sharded experiment.
+
+    Spawned by the backend once every runner-pod shard has reported complete.
+    Runs the same runner image in --finalize mode: it pulls each shard's partial
+    results/artifacts, merges them into the single results.csv/zip/plot, sends the
+    completion email, and writes the terminal finished/status fields. It is a
+    plain single-pod Job (no Indexed parallelism) named runner-<expId>-finalize.
+    """
+    job_name = "runner-" + str(experiment_id) + "-finalize"
+    payload = {"experiment": {"id": experiment_id}}
+    job_command = ["python3", "/app/runner.py", "--finalize", json.dumps(payload)]
+
+    runner_body = get_yaml_file_body(RUNNER_PATH)
+
+    runner_body['metadata']['name'] = job_name
+    pod_spec = runner_body['spec']['template']['spec']
+    pod_spec['containers'][0]['command'] = job_command
+
+    # Match the runner image selection used for the shard pods so the finalize
+    # step runs the same code/deps.
+    runtime_class = os.getenv("RUNNER_RUNTIME_CLASS")
+    if runtime_class:
+        pod_spec['runtimeClassName'] = runtime_class
+    if os.getenv("IMAGE_RUNNER"):
+        pod_spec['containers'][0]['image'] = str(os.getenv("IMAGE_RUNNER"))
 
     return runner_body
 

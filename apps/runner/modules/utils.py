@@ -145,6 +145,76 @@ def update_exp_value(experimentId: str, field: str, newValue):
     else:
         raise DatabaseConnectionError("Error updating experiment document!")
 
+def increment_exp_value(experimentId: str, field: str, amount=1):
+    """Atomically increment a numeric experiment field on the backend ($inc).
+
+    Progress counters (passes/fails) are written concurrently by every runner-pod
+    shard, so each shard sends a delta here instead of a $set of its own absolute
+    count (which would clobber the other shards' progress).
+    """
+    url = f'http://glados-service-backend:{os.getenv("BACKEND_PORT")}/incrementExperimentValue'
+    payload = {
+        "experimentId": experimentId,
+        "field": field,
+        "amount": amount,
+    }
+    response = requests.post(url, json=payload, timeout=10)
+    if response.status_code != 200:
+        raise DatabaseConnectionError("Error incrementing experiment document!")
+
+def report_shard_complete(experimentId: str):
+    """Tell the backend this runner-pod shard has finished.
+
+    The backend $inc's finishedShards and spawns the finalize job when the last
+    shard reports. Best-effort/non-fatal from the runner's perspective, but the
+    caller invokes this from a finally block so even a failed shard still counts
+    (otherwise finishedShards never reaches the worker count and the experiment
+    would hang without finalizing).
+    """
+    url = f'http://glados-service-backend:{os.getenv("BACKEND_PORT")}/shardComplete'
+    payload = {"experimentId": experimentId}
+    response = requests.post(url, json=payload, timeout=10)
+    if response.status_code != 200:
+        raise DatabaseConnectionError("Error reporting shard completion!")
+
+def upload_partial_results(experimentId: str, shardIndex: int, resultContent: str):
+    """Upload this shard's partial results CSV (its header + its rows)."""
+    url = f'http://glados-service-backend:{os.getenv("BACKEND_PORT")}/uploadPartialResults'
+    payload = {
+        "experimentId": experimentId,
+        "shardIndex": shardIndex,
+        "results": resultContent,
+    }
+    _call_backend(url, payload, "inserted partial result csv into mongodb with id")
+
+def upload_partial_artifacts(experimentId: str, shardIndex: int, encoded: Binary):
+    """Upload this shard's partial ResCsvs zip (its per-trial logs/extra files)."""
+    url = f'http://glados-service-backend:{os.getenv("BACKEND_PORT")}/uploadPartialArtifacts'
+    payload = {
+        "experimentId": experimentId,
+        "shardIndex": shardIndex,
+        "encoded": base64.b64encode(encoded).decode("utf-8"),
+    }
+    _call_backend(url, payload, "inserted partial artifacts into mongodb with id")
+
+def get_partial_results(experimentId: str):
+    """Fetch every shard's partial results CSV (used by the finalize job)."""
+    url = f'http://glados-service-backend:{os.getenv("BACKEND_PORT")}/getPartialResults'
+    payload = {"experimentId": experimentId}
+    response = requests.post(url, json=payload, timeout=30)
+    if response.status_code == 200:
+        return response.json()['partials']
+    raise DatabaseConnectionError("Error fetching partial results from backend!")
+
+def get_partial_artifacts(experimentId: str):
+    """Fetch every shard's partial ResCsvs zip, base64-encoded (finalize job)."""
+    url = f'http://glados-service-backend:{os.getenv("BACKEND_PORT")}/getPartialArtifacts'
+    payload = {"experimentId": experimentId}
+    response = requests.post(url, json=payload, timeout=30)
+    if response.status_code == 200:
+        return response.json()['partials']
+    raise DatabaseConnectionError("Error fetching partial artifacts from backend!")
+
 def request_completion_email(creator_email: str, name: str, status: str, passes, fails):
     """Ask the backend to send the experiment-completion email.
 

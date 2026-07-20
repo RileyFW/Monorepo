@@ -1,4 +1,5 @@
 import csv
+import io
 import shutil
 from subprocess import Popen, PIPE, TimeoutExpired
 import time
@@ -7,11 +8,11 @@ import os
 # from modules.data.trial import Trial
 from modules.configs import create_config_from_data, create_yaml_from_data, get_configs_ordered_ini, get_configs_ordered_yaml
 from modules.data.experiment import ExperimentData, ExperimentType
-from modules.exceptions import ExperimentAbort, FileHandlingError, GladosInternalError, GladosUserError, TrialTimeoutError
+from modules.exceptions import FileHandlingError, GladosInternalError, GladosUserError, TrialTimeoutError
 from modules.exceptions import InternalTrialFailedError
 from modules.configs import get_config_paramNames_ini, get_config_paramNames_yaml
 from modules.logging.gladosLogging import get_experiment_logger
-from modules.utils import update_exp_value
+from modules.utils import update_exp_value, increment_exp_value
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -129,104 +130,46 @@ def _add_to_output_batch(trialExtraFile: str, ExpRun: int):
         raise FileHandlingError("Failed to copy results csv. Maybe there was a typo in the filepath?") from err
    
     
-def _run_trial_zero(experiment: ExperimentData, trialNum: int):
-    with open('results.csv', 'w', encoding="utf8") as expResults:
-        writer = csv.writer(expResults)
-        explogger.info(f"Running Trial {trialNum}")
-        numOutputs = 0
-        
-        startSeconds = time.time()
-        if trialNum == 0:
-            update_exp_value(experiment.expId, "startedAtEpochMillis", int(startSeconds * 1000))
-        try:
-            configFileName = create_config_from_data(experiment, trialNum)
-            if(experiment.configFileFormat == "yaml"):
-                paramNames = get_config_paramNames_yaml('configFiles/0.yaml')
-            else:
-                paramNames = get_config_paramNames_ini('configFiles/0.ini')
-        except Exception as err:
-            raise GladosInternalError(f"Failed to generate config {trialNum} file") from err
-                
-        try:
-            _run_trial(experiment, f'../configFiles/{configFileName}', trialNum)
-        except (TrialTimeoutError, InternalTrialFailedError) as err:
-            _handle_trial_error(experiment, numOutputs, paramNames, None, trialNum, err)
-            return
-
-        endSeconds = time.time()
-        timeTakenMinutes = (endSeconds - startSeconds) / 60
-
-        if trialNum == 0:
-            estimatedTotalTimeMinutes = timeTakenMinutes * experiment.totalExperimentRuns
-            explogger.info(f"Estimated minutes to run: {estimatedTotalTimeMinutes}")
-            update_exp_value(experiment.expId, 'estimatedTotalTimeMinutes', estimatedTotalTimeMinutes)
-
-            try:
-                csvHeader = _get_line_n_of_trial_results_csv(0, f"trial{trialNum}/" + experiment.trialResult)
-            except GladosUserError as err:
-                _handle_trial_error(experiment, numOutputs, paramNames, None, trialNum, err)
-                return
-            numOutputs = len(csvHeader)
-            writer.writerow(["Experiment Run"] + csvHeader + paramNames)
-
-        if experiment.has_extra_files() and experiment.trialExtraFile != None:
-            try:
-                _add_to_output_batch(f"trial{trialNum}/" + experiment.trialExtraFile, trialNum)
-            except FileHandlingError as err:
-                _handle_trial_error(experiment, numOutputs, paramNames, None, trialNum, err)                    
-                return
-
-        try:
-            lineToGet = experiment.trialResultLineNumber
-            output = _get_line_n_of_trial_results_csv(lineToGet, f"trial{trialNum}/" + experiment.trialResult)
-        except GladosUserError as err:
-            _handle_trial_error(experiment, numOutputs, paramNames, None, trialNum, err)
-            return
-        if(experiment.configFileFormat == "yaml"):
-            ordered_configs = get_configs_ordered_yaml(f'configFiles/{trialNum}.yaml', paramNames)
-        else:
-            ordered_configs = get_configs_ordered_ini(f'configFiles/{trialNum}.ini', paramNames)
-        writer.writerow([trialNum] + output + ordered_configs)
-
-        explogger.info(f'Trial#{trialNum} completed')
-        experiment.passes += 1
-        update_exp_value(experiment.expId, 'passes', experiment.passes)
-     
-        
 def _run_trial_wrapper(experiment: ExperimentData, trialNum: int):
+    """Run a single trial and return its results row, or None if the trial failed.
+
+    Runs in a ProcessPoolExecutor worker. The header/param-name schema is derived
+    from *this trial's own* config file rather than config 0: under sharding a pod
+    may not own trial 0, so `configFiles/0.ini` need not exist here. Every config
+    shares the same parameter keys, so any trial's config yields the same schema.
+    """
     explogger.info(f"Running Trial {trialNum}")
-    numOutputs = 0
 
     try:
         if(experiment.configFileFormat == "yaml"):
             configFileName = create_yaml_from_data(experiment, trialNum)
-            paramNames = get_config_paramNames_yaml('configFiles/0.yaml')
+            paramNames = get_config_paramNames_yaml(f'configFiles/{configFileName}')
         else:
             configFileName = create_config_from_data(experiment, trialNum)
-            paramNames = get_config_paramNames_ini('configFiles/0.ini')
+            paramNames = get_config_paramNames_ini(f'configFiles/{configFileName}')
     except Exception as err:
         raise GladosInternalError(f"Failed to generate config {trialNum} file") from err
-               
+
     try:
         _run_trial(experiment, f'../configFiles/{configFileName}', trialNum)
     except (TrialTimeoutError, InternalTrialFailedError) as err:
-        _handle_trial_error(experiment, numOutputs, paramNames, None, trialNum, err)
-        return
+        _record_trial_failure(experiment, trialNum, err)
+        return None
 
     if experiment.has_extra_files() and experiment.trialExtraFile != None:
         try:
             _add_to_output_batch(f"trial{trialNum}/" + experiment.trialExtraFile, trialNum)
         except FileHandlingError as err:
-            _handle_trial_error(experiment, numOutputs, paramNames, None, trialNum, err)                    
-            return
+            _record_trial_failure(experiment, trialNum, err)
+            return None
 
     try:
         lineToGet = experiment.trialResultLineNumber
         output = _get_line_n_of_trial_results_csv(lineToGet, f"trial{trialNum}/" + experiment.trialResult)
     except GladosUserError as err:
-        _handle_trial_error(experiment, numOutputs, paramNames, None, trialNum, err)
-        return
-    
+        _record_trial_failure(experiment, trialNum, err)
+        return None
+
     # return the object that will be written to a row
     if(experiment.configFileFormat == "yaml"):
         ordered_configs = get_configs_ordered_yaml(f'configFiles/{trialNum}.yaml', paramNames)
@@ -235,74 +178,125 @@ def _run_trial_wrapper(experiment: ExperimentData, trialNum: int):
     return [trialNum] + output + ordered_configs
 
 
-def conduct_experiment(experiment: ExperimentData):
+def merge_partial_result_contents(partials: "list"):
+    """Merge shard partial results CSVs into (rows, header).
+
+    Each partial is a dict with a "results" CSV string of `header + rows` (the
+    header line -- starting with "Experiment Run" -- is present only when that
+    shard had at least one successful trial). Returns every data row sorted by
+    trial number and a single header (None when no shard produced any rows). This
+    is the pure core of the finalize merge, kept dependency-free for testing.
+    """
+    header = None
+    rows = []
+    for partial in partials:
+        lines = list(csv.reader(io.StringIO(partial.get('results', ''))))
+        if not lines:
+            continue
+        if lines[0] and lines[0][0] == "Experiment Run":
+            if header is None:
+                header = lines[0]
+            dataLines = lines[1:]
+        else:
+            dataLines = lines
+        for line in dataLines:
+            if line:
+                rows.append(line)
+    rows.sort(key=lambda r: int(r[0]))
+    return rows, header
+
+
+def shard_trial_nums(totalExperimentRuns: int, shardIndex: int, numShards: int):
+    """The trial indices this shard owns: every trialNum where n % numShards == shardIndex.
+
+    Because trial N maps to config N deterministically on every pod, this
+    round-robin partition assigns each trial to exactly one shard with no
+    cross-pod coordination. Extra shards (numShards > totalExperimentRuns) simply
+    get an empty list.
+    """
+    if numShards < 1:
+        numShards = 1
+    return [n for n in range(0, totalExperimentRuns) if n % numShards == shardIndex]
+
+
+def conduct_experiment(experiment: ExperimentData, shardIndex: int = 0, numShards: int = 1):
     """
     Call this function when inside the experiment folder!
+
+    Runs only this shard's subset of trials and writes a *partial* results.csv
+    (this shard's header + its rows). The finalize job merges every shard's
+    partial into the single aggregated results.csv.
     """
     os.mkdir('configFiles')
-    explogger.info(f"Running Experiment {experiment.expId}")
-    explogger.info(f"Now Running {experiment.totalExperimentRuns} trials")
-    
-    trialNums = range(0, experiment.totalExperimentRuns)
-        
-            
-    # run trial run 0
-    # _run_trial_zero(experiment, 0)
+    trialNums = shard_trial_nums(experiment.totalExperimentRuns, shardIndex, numShards)
+    explogger.info(f"Running Experiment {experiment.expId} shard {shardIndex}/{numShards}")
+    explogger.info(f"This shard runs {len(trialNums)} of {experiment.totalExperimentRuns} trials: {trialNums}")
+
     results = []
-    
-    # mark the experiment as started
-    update_exp_value(experiment.expId, "startedAtEpochMillis", int(time.time() * 1000))
+
+    # Only shard 0 stamps the experiment start time, to avoid redundant/racing writes.
+    if shardIndex == 0:
+        update_exp_value(experiment.expId, "startedAtEpochMillis", int(time.time() * 1000))
+
     with ProcessPoolExecutor() as executor:
-        # run all of the experiments
         futures = [executor.submit(_run_trial_wrapper, experiment, trialNum) for trialNum in trialNums]
-        # Wait for all tasks to complete
         for future in as_completed(futures):
             try:
-                results.append(future.result())
-                # increment the passes on the experiment
-                experiment.passes += 1
-                update_exp_value(experiment.expId, 'passes', experiment.passes)
+                row = future.result()
+                if row is not None:
+                    results.append(row)
+                    # Atomic $inc so concurrent shards sum correctly (see increment_exp_value).
+                    experiment.passes += 1
+                    increment_exp_value(experiment.expId, 'passes', 1)
             except Exception as e:
                 explogger.error(f"Task failed with exception: {e}")
-        
-    header = False
+
+    _write_partial_results(experiment, results)
+    explogger.info(f"Finished running shard {shardIndex} trials")
+
+
+def _write_partial_results(experiment: ExperimentData, results: "list"):
+    """Write this shard's partial results.csv: its header (if it had any success) + its rows."""
+    results.sort(key=lambda x: x[0])
     with open('results.csv', 'w', encoding="utf8") as expResults:
         writer = csv.writer(expResults)
-        if not header:
-            if(experiment.configFileFormat == "yaml"):
-                paramNames = get_config_paramNames_yaml('configFiles/0.yaml')
-            else:
-                paramNames = get_config_paramNames_ini('configFiles/0.ini')
-            csvHeader = _get_line_n_of_trial_results_csv(0, f"trial0/" + experiment.trialResult)
-            writer.writerow(["Experiment Run"] + csvHeader + paramNames)
-            header = True
-        # write the results to the csv file
-        # sort results by the first item in the array
-        results.sort(key=lambda x: x[0])
+        header = _build_results_header(experiment, results)
+        if header is not None:
+            writer.writerow(header)
         writer.writerows(results)
-        
-    explogger.info("Finished running Trials")
-    experiment.status = "COMPLETED"
 
 
-def _handle_trial_error(experiment: ExperimentData, numOutputs: int, paramNames: "list", writer, trialNum: int, err: BaseException):
-    csvErrorValue = None
+def _build_results_header(experiment: ExperimentData, sortedResults: "list"):
+    """Build the results header from this shard's lowest-indexed successful trial.
+
+    Returns None if the shard produced no successful trials (empty partial). The
+    user's output columns and hyperparameter names are identical across trials,
+    so any completed trial in the shard yields a valid header; the finalize merge
+    keeps a single one.
+    """
+    if not sortedResults:
+        return None
+    firstTrial = sortedResults[0][0]
+    if(experiment.configFileFormat == "yaml"):
+        paramNames = get_config_paramNames_yaml(f'configFiles/{firstTrial}.yaml')
+    else:
+        paramNames = get_config_paramNames_ini(f'configFiles/{firstTrial}.ini')
+    csvHeader = _get_line_n_of_trial_results_csv(0, f"trial{firstTrial}/" + experiment.trialResult)
+    return ["Experiment Run"] + csvHeader + paramNames
+
+
+def _record_trial_failure(experiment: ExperimentData, trialNum: int, err: BaseException):
+    """Record a failed trial: log it and atomically increment the shared fail counter.
+
+    The old code special-cased trial 0 to abort the whole experiment, but that
+    path was already dead in the ProcessPoolExecutor design (the exception was
+    swallowed by the pool's result loop) and cannot cheaply coordinate an abort
+    across shards, so failures are now uniformly counted without a row.
+    """
     if isinstance(err, TrialTimeoutError):
-        csvErrorValue = "TIMEOUT"
         explogger.error(f"Trial#{trialNum} timed out")
     else:
-        csvErrorValue = "ERROR"
-        explogger.error(f'Trial#{trialNum} Encountered an Error')
+        explogger.error(f"Trial#{trialNum} encountered an error")
     explogger.exception(err)
     experiment.fails += 1
-    # expRef.update({'fails': experiment.fails})
-    update_exp_value(experiment.expId, 'fails', experiment.fails)
-    if trialNum == 0:
-        message = f"First trial of {experiment.expId} ran into an error while running, aborting the whole experiment. Read the traceback to find out what the actual cause of this problem is (it will not necessarily be at the top of the stack trace)."
-        raise ExperimentAbort(message) from err
-    else:
-        if(experiment.configFileFormat == "yaml"):
-            ordered_configs = get_configs_ordered_yaml(f'configFiles/{trialNum}.yaml', paramNames)
-        else:
-            ordered_configs = get_configs_ordered_ini(f'configFiles/{trialNum}.ini', paramNames)
-        writer.writerow([trialNum] + [csvErrorValue for i in range(numOutputs)] + ordered_configs)
+    increment_exp_value(experiment.expId, 'fails', 1)
