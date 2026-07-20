@@ -8,6 +8,10 @@ spec:
     metadata:
       labels:
         app: GLADOS
+        # Distinct label the runner NetworkPolicy selects on. `app: GLADOS` is
+        # shared with other GLADOS components (e.g. the backend), so it cannot be
+        # the selector for the runner-only egress lockdown.
+        role: runner
     spec:
       containers:
       - name: runner
