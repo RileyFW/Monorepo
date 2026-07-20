@@ -13,6 +13,7 @@ k8s_yaml([
     "kubernetes_init/tilt/deployment-backend.yaml",
     "kubernetes_init/tilt/service-backend-dev.yaml",
     "kubernetes_init/tilt/network-policy-runner.yaml",
+    "kubernetes_init/tilt/runtime-class-gvisor.yaml",
     "helm_packages/mongodb-helm/pvs.yaml"
 ])
 

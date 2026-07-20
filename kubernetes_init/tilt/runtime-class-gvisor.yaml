@@ -1,0 +1,28 @@
+# gVisor sandbox runtime for the untrusted runner pods.
+#
+# gVisor (runsc) runs the container against a user-space kernel, so
+# user-submitted experiment code is isolated from the host kernel's syscall
+# surface -- defense in depth on top of the non-root / read-only-rootfs / dropped
+# capabilities hardening and the egress NetworkPolicy.
+#
+# REQUIREMENTS:
+#   * The node's container runtime must be containerd (not docker), and the
+#     gVisor runtime must be installed so containerd has a `runsc` handler. On
+#     the minikube dev cluster this is done by installing runsc on the node and
+#     registering a containerd runtime handler (see .devcontainer/post-start.sh;
+#     the `minikube addons enable gvisor` path is NOT used -- its installer image
+#     was removed upstream). The cluster must be created with
+#     --minikube-container-runtime=containerd.
+#
+# This object only DECLARES the runtime. Pods opt in via runtimeClassName, which
+# the backend sets on the runner Job only when RUNNER_RUNTIME_CLASS is configured
+# (see apps/backend/spawn_runner.py) -- so a cluster without gVisor installed is
+# unaffected until it is explicitly enabled.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  # Pods reference this name via spec.runtimeClassName.
+  name: gvisor
+# Must match the runtime handler containerd is configured with. The minikube
+# gvisor addon registers the handler as "runsc".
+handler: runsc
